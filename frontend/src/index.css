@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Telegram CSS variables fall-through when not inside the WebApp */
+:root {
+  --tg-theme-bg-color:             #ffffff;
+  --tg-theme-secondary-bg-color:   #f0f0f0;
+  --tg-theme-text-color:           #000000;
+  --tg-theme-hint-color:           #999999;
+  --tg-theme-link-color:           #2481cc;
+  --tg-theme-button-color:         #2481cc;
+  --tg-theme-button-text-color:    #ffffff;
+  --tg-theme-destructive-text-color: #cc2424;
+}
+
+html, body, #root {
+  height: 100%;
+  height: 100dvh;
+}
+
+/* Hide native scrollbar but keep scroll behaviour */
+.scrollbar-hidden::-webkit-scrollbar { display: none; }
+.scrollbar-hidden { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Smooth rubber-band-style keyboard key press */
+.key-press:active { transform: scale(0.92); }
