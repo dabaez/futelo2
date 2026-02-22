@@ -106,6 +106,7 @@ export default function ShopModal({
   const [swingResult, setSwingResult] = useState(null); // { found, letter } | null
   const [mineError, setMineError]     = useState(null);
   const [swingState, setSwingState]   = useState('idle'); // 'idle'|'swinging'|'miss'|'found'
+  const [rockShaking, setRockShaking] = useState(false);
 
   // ── Prompt tab state ─────────────────────────────────────────────────────
   const [firingPrompt, setFiringPrompt] = useState(false);
@@ -694,29 +695,62 @@ export default function ShopModal({
               {/* ── Mining sub-view ─── */}
               {hitsLeft > 0 && (
                 <>
-                  {/* Rock / result display */}
+                  {/* Tappable rock */}
                   <div className="flex flex-col items-center gap-3 py-4">
-                    {swingState === 'idle' && (
-                      <span className="text-7xl select-none">🪨</span>
-                    )}
-                    {swingState === 'swinging' && (
-                      <span className="text-7xl select-none animate-bounce">⛏️</span>
-                    )}
-                    {swingState === 'miss' && (
-                      <>
-                        <span className="text-7xl select-none">🪨</span>
+                    <div
+                      role="button"
+                      aria-label="Golpear roca"
+                      className={`text-8xl select-none cursor-pointer transition-transform active:scale-90 ${
+                        rockShaking ? 'animate-rock-shake' : ''
+                      }`}
+                      onPointerDown={async () => {
+                        if (swinging) return;
+                        setSwinging(true);
+                        setRockShaking(true);
+                        setMineError(null);
+                        try {
+                          const r = await fetch('/api/mine/swing', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'x-init-data': initData || '' },
+                          });
+                          const data = await safeJson(r);
+                          if (!r.ok) throw new Error(data?.error || 'Error al excavar.');
+                          setHitsLeft(data.hitsLeft);
+                          if (data.found) {
+                            setSwingResult({ letter: data.letter });
+                            setSwingState('found');
+                            onPurchase?.({ newInventory: data.newInventory });
+                            window.Telegram?.WebApp?.HapticFeedback?.impactOccurred('medium');
+                          } else {
+                            setSwingResult(null);
+                            setSwingState('miss');
+                          }
+                        } catch (e) {
+                          setMineError(e.message);
+                          setSwingState('idle');
+                        } finally {
+                          setSwinging(false);
+                        }
+                      }}
+                      onAnimationEnd={() => setRockShaking(false)}
+                    >
+                      🪨
+                    </div>
+
+                    {/* Status messages */}
+                    <div className="min-h-[4rem] flex flex-col items-center justify-center gap-2">
+                      {swingState === 'miss' && (
                         <p className="text-sm text-tg-hint">💨 Nada esta vez…</p>
-                      </>
-                    )}
-                    {swingState === 'found' && swingResult && (
-                      <>
-                        <span className="text-5xl select-none">💥</span>
-                        <div className="mt-1 bg-tg-button/20 border border-tg-button/40 rounded-xl px-6 py-3 text-center">
-                          <span className="text-4xl font-bold text-tg-button uppercase">{swingResult.letter}</span>
-                        </div>
-                        <p className="text-xs text-tg-hint">¡Encontraste una letra!</p>
-                      </>
-                    )}
+                      )}
+                      {swingState === 'found' && swingResult && (
+                        <>
+                          <div className="bg-tg-button/20 border border-tg-button/40 rounded-xl px-6 py-2 text-center">
+                            <span className="text-4xl font-bold text-tg-button uppercase">{swingResult.letter}</span>
+                          </div>
+                          <p className="text-xs text-tg-hint">¡Encontraste una letra!</p>
+                        </>
+                      )}
+                    </div>
                   </div>
 
                   {/* Hit counter */}
@@ -727,43 +761,6 @@ export default function ShopModal({
                   {mineError && (
                     <p className="text-xs text-red-500 text-center">{mineError}</p>
                   )}
-
-                  {/* Swing button */}
-                  <button
-                    onClick={async () => {
-                      if (swinging) return;
-                      setSwinging(true);
-                      setSwingState('swinging');
-                      setMineError(null);
-                      try {
-                        const r = await fetch('/api/mine/swing', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json', 'x-init-data': initData || '' },
-                        });
-                        const data = await safeJson(r);
-                        if (!r.ok) throw new Error(data?.error || 'Error al excavar.');
-                        setHitsLeft(data.hitsLeft);
-                        if (data.found) {
-                          setSwingResult({ letter: data.letter });
-                          setSwingState('found');
-                          onPurchase?.({ newInventory: data.newInventory });
-                          window.Telegram?.WebApp?.HapticFeedback?.impactOccurred('medium');
-                        } else {
-                          setSwingResult(null);
-                          setSwingState('miss');
-                        }
-                      } catch (e) {
-                        setMineError(e.message);
-                        setSwingState('idle');
-                      } finally {
-                        setSwinging(false);
-                      }
-                    }}
-                    disabled={swinging || hitsLeft <= 0}
-                    className="bg-tg-button text-tg-btn-text font-semibold rounded-xl py-3 active:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    {swinging ? 'Golpeando…' : '⛏️ Golpear roca'}
-                  </button>
 
                   {/* Buy more pickaxes inline */}
                   <button

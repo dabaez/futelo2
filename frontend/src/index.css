@@ -25,3 +25,15 @@ html, body, #root {
 
 /* Smooth rubber-band-style keyboard key press */
 .key-press:active { transform: scale(0.92); }
+
+/* Rock shake animation for the letter mines */
+@keyframes rock-shake {
+  0%,100% { transform: translate(0,0) rotate(0deg); }
+  15%     { transform: translate(-7px,0) rotate(-5deg); }
+  30%     { transform: translate(7px,0)  rotate(5deg); }
+  45%     { transform: translate(-5px,0) rotate(-3deg); }
+  60%     { transform: translate(5px,0)  rotate(3deg); }
+  75%     { transform: translate(-3px,0) rotate(-1deg); }
+  90%     { transform: translate(3px,0)  rotate(1deg); }
+}
+.animate-rock-shake { animation: rock-shake 0.4s ease-in-out; }
