@@ -230,13 +230,12 @@ export default function App() {
     socket.on('lottery_bet_placed', onLotteryBetPlaced);
     socket.on('lottery_closed',     onLotteryClosed);
 
-    const onListingSoldSeller   = ({ letter, price }) =>
-      showToast(`💰 ¡Vendiste "${letter.toUpperCase()}" por ${price} 🪙!`, 'success');
-    const onBmListingSoldSeller = ({ letter, price }) =>
-      showToast(`🕵️ ¡Vendiste "${letter.toUpperCase()}" por ${price} 🪙 (mercado negro)!`, 'success');
+    // Single notification channel — used for queued toasts (e.g. letter sold
+    // while the seller was offline). Multiple may arrive on reconnect.
+    const onNotification = ({ text, type = 'info' }) =>
+      showToast(text, type, { duration: 5000 });
 
-    socket.on('listing_sold_seller',    onListingSoldSeller);
-    socket.on('bm_listing_sold_seller', onBmListingSoldSeller);
+    socket.on('notification', onNotification);
 
     return () => {
       socket.off('user_update',      onUpdate);
@@ -250,8 +249,7 @@ export default function App() {
       socket.off('lottery_bet_placed', onLotteryBetPlaced);
       socket.off('lottery_closed',     onLotteryClosed);
       socket.off('prompt_error',      onPromptError);
-      socket.off('listing_sold_seller',    onListingSoldSeller);
-      socket.off('bm_listing_sold_seller', onBmListingSoldSeller);
+      socket.off('notification',      onNotification);
     };
   }, [socket, updateUser]);
 

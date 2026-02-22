@@ -337,11 +337,12 @@ app.post('/api/market/buy/:id', authMiddleware, (req, res) => {
     });
     // Tell all clients this listing is gone
     io.emit('market_listing_sold', { listingId: result.listingId });
-    // Notify the seller specifically (targeted to their socket room)
-    io.to(`user:${result.sellerId}`).emit('listing_sold_seller', {
-      letter: result.letter,
-      price:  result.sellerReceives,
-    });
+    // Notify the seller — queued so offline sellers see it on reconnect
+    notifyUser(
+      result.sellerId,
+      `💰 ¡Vendiste "${result.letter.toUpperCase()}" por ${result.sellerReceives} 🪙!`,
+      'success'
+    );
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -415,11 +416,12 @@ app.post('/api/bm/buy/:id', authMiddleware, (req, res) => {
       newCoins: requireUser(result.sellerId).coins,
     });
     io.emit('bm_listing_sold', { listingId: result.listingId });
-    // Notify the BM seller specifically
-    io.to(`user:${result.sellerId}`).emit('bm_listing_sold_seller', {
-      letter: result.letter,
-      price:  result.sellerReceives,
-    });
+    // Notify the BM seller — queued so offline sellers see it on reconnect
+    notifyUser(
+      result.sellerId,
+      `🕵️ ¡Vendiste "${result.letter.toUpperCase()}" por ${result.sellerReceives} 🪙 (mercado negro)!`,
+      'success'
+    );
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -514,6 +516,17 @@ io.on('connection', (socket) => {
 
   // Join a personal room so per-user notifications work
   socket.join(`user:${userId}`);
+
+  // Drain any queued notifications accumulated while the user was offline
+  const pending = stmts.getPendingNotifications.all(userId);
+  if (pending.length > 0) {
+    for (const n of pending) {
+      socket.emit('notification', { text: n.text, type: n.type });
+    }
+    stmts.markAllNotificationsDelivered.run(userId);
+  }
+  // Prune delivered notifications older than 7 days to keep the table lean
+  stmts.pruneOldNotifications.run(Math.floor(Date.now() / 1000) - 7 * 24 * 3600);
 
   // ── Event: send_message ──────────────────────────────────────────────────
   socket.on('send_message', ({ text }) => {
@@ -641,6 +654,29 @@ function buildMessagePayload(user, text, result) {
     lockedLetter:result.lockedLetter,
     createdAt:   Math.floor(Date.now() / 1000),
   };
+}
+
+/**
+ * Queue a toast notification for a specific user.
+ *
+ * - Always persists the notification in the DB so it survives a disconnect.
+ * - If the user currently has an active socket connection (room is non-empty)
+ *   the notification is emitted immediately and marked delivered right away.
+ * - Otherwise it stays undelivered and will be drained on the user's next
+ *   socket connect (see the io.on('connection') handler below).
+ *
+ * @param {number} userId  Telegram user id
+ * @param {string} text    Toast message text
+ * @param {string} [type]  'success' | 'info' | 'warn' | 'error'
+ */
+function notifyUser(userId, text, type = 'info') {
+  const r = stmts.insertNotification.run({ userId, text, type });
+  const notifId = r.lastInsertRowid;
+  const roomSize = io.sockets.adapter.rooms.get(`user:${userId}`)?.size ?? 0;
+  if (roomSize > 0) {
+    io.to(`user:${userId}`).emit('notification', { text, type });
+    stmts.markNotificationDelivered.run(notifId);
+  }
 }
 
 /**

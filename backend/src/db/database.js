@@ -98,7 +98,7 @@ db.exec(`
 // Migrations never need to be run manually — they apply automatically on startup.
 //
 // IMPORTANT: never edit a past migration. Always append a new one.
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 const migrations = [
   // ── v1: P2P letter market ─────────────────────────────────────────────────
@@ -196,6 +196,23 @@ const migrations = [
     db.exec(`
       INSERT OR IGNORE INTO users (id, username, first_name, photo_url, coins, inventory_json)
       VALUES (0, 'sistema', 'Sistema', '', 0, '{}');
+    `);
+  },
+
+  // ── v6: Persistent per-user notification queue ──────────────────────
+  // Toast notifications (e.g. "your letter sold") are queued here so
+  // offline players see them the next time they connect.
+  () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id    INTEGER NOT NULL REFERENCES users(id),
+        text       TEXT    NOT NULL,
+        type       TEXT    NOT NULL DEFAULT 'info',
+        delivered  INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, delivered);
     `);
   },
 ];
@@ -350,6 +367,23 @@ const stmts = {
   `),
   getUserBetCountInRound: db.prepare(
     'SELECT COUNT(*) as count FROM lottery_bets WHERE round_id = ? AND user_id = ?'
+  ),
+
+  // ── Notifications ─────────────────────────────────────────────────────────────
+  insertNotification: db.prepare(
+    'INSERT INTO notifications (user_id, text, type) VALUES (@userId, @text, @type)'
+  ),
+  getPendingNotifications: db.prepare(
+    "SELECT id, text, type FROM notifications WHERE user_id = ? AND delivered = 0 ORDER BY created_at ASC"
+  ),
+  markNotificationDelivered: db.prepare(
+    'UPDATE notifications SET delivered = 1 WHERE id = ?'
+  ),
+  markAllNotificationsDelivered: db.prepare(
+    'UPDATE notifications SET delivered = 1 WHERE user_id = ? AND delivered = 0'
+  ),
+  pruneOldNotifications: db.prepare(
+    'DELETE FROM notifications WHERE delivered = 1 AND created_at < ?'
   ),
 };
 
