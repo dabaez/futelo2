@@ -98,7 +98,7 @@ db.exec(`
 // Migrations never need to be run manually — they apply automatically on startup.
 //
 // IMPORTANT: never edit a past migration. Always append a new one.
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const migrations = [
   // ── v1: P2P letter market ─────────────────────────────────────────────────
@@ -165,6 +165,26 @@ const migrations = [
       );
       CREATE INDEX IF NOT EXISTS idx_lr_status ON lottery_rounds(status);
       CREATE INDEX IF NOT EXISTS idx_lb_round  ON lottery_bets(round_id);
+    `);
+  },
+
+  // ── v4: Allow multiple gambling bets per user per round ──────────────────
+  // Removes the UNIQUE(round_id, user_id) constraint so players can throw
+  // multiple letters into the pot. Existing rows are preserved.
+  () => {
+    db.exec(`
+      CREATE TABLE lottery_bets_new (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        round_id   INTEGER NOT NULL REFERENCES lottery_rounds(id),
+        user_id    INTEGER NOT NULL REFERENCES users(id),
+        letter     TEXT    NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+      );
+      INSERT INTO lottery_bets_new SELECT * FROM lottery_bets;
+      DROP TABLE lottery_bets;
+      ALTER TABLE lottery_bets_new RENAME TO lottery_bets;
+      CREATE INDEX IF NOT EXISTS idx_lb_round      ON lottery_bets(round_id);
+      CREATE INDEX IF NOT EXISTS idx_lb_user_round ON lottery_bets(round_id, user_id);
     `);
   },
 ];
@@ -303,7 +323,7 @@ const stmts = {
   closeLotteryRound:    db.prepare("UPDATE lottery_rounds SET status = 'closed' WHERE id = ?"),
   addJackpotToRound:    db.prepare('UPDATE lottery_rounds SET jackpot = jackpot + ? WHERE id = ?'),
   insertLotteryBet:     db.prepare(
-    'INSERT OR IGNORE INTO lottery_bets (round_id, user_id, letter) VALUES (?, ?, ?)'
+    'INSERT INTO lottery_bets (round_id, user_id, letter) VALUES (?, ?, ?)'
   ),
   getLotteryBetById:    db.prepare(`
     SELECT lb.*, u.username, u.first_name
@@ -317,8 +337,8 @@ const stmts = {
     WHERE lb.round_id = ?
     ORDER BY lb.created_at ASC
   `),
-  getUserLotteryBet:    db.prepare(
-    'SELECT * FROM lottery_bets WHERE round_id = ? AND user_id = ?'
+  getUserBetCountInRound: db.prepare(
+    'SELECT COUNT(*) as count FROM lottery_bets WHERE round_id = ? AND user_id = ?'
   ),
 };
 

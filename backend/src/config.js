@@ -93,13 +93,31 @@ module.exports = {
   BEG_GIFT_AMOUNT: 10,
   /** Minimum seconds between two beg requests from the same user. */
   BEG_COOLDOWN_SEC: 60,
-  // ── Letter lottery ──────────────────────────────────────────────────────────
-  /** Coins paid to start a lottery round (added to the jackpot). */
-  LOTTERY_START_COST: 200,
-  /** Fixed bet amount per player per round. */
-  LOTTERY_BET_AMOUNT: 50,
-  /** How long (seconds) a lottery round stays open for bets. */
+  // ── Letter lottery / gambling ───────────────────────────────────────────────
+  /** Coins paid to start a gambling round (added to the jackpot seed). */
+  LOTTERY_START_COST: 50,
+  /** How long (seconds) a gambling round stays open for guesses. */
   LOTTERY_DURATION_SEC: 5 * 60,   // 5 minutes
+  /** Coins created per letter in the loser-pot (winner payout or jackpot carry). */
+  GAMBLING_COINS_PER_LETTER: 50,
+  /** Inventory levels added to the winning letter for a correct guess. */
+  GAMBLING_WIN_LETTERS: 2,
+  /**
+   * Error messages shown when the anti-gambling protection check fires.
+   * One is chosen at random on each escalated bet attempt.
+   */
+  GAMBLING_ERRORS: [
+    'Protección antiapuestas activada.',
+    'Un cerdo tropezó y desenchufó el cable.',
+    'El sistema de lotería está en mantenimiento.',
+    'Tu conexión fue bloqueada por el crupier.',
+    'Alguien tiró el café encima del servidor.',
+    'Error 403: Suerte denegada.',
+    'El reglamento prohíbe esta apuesta adicional.',
+    'La señal de TV interrumpió las comunicaciones.',
+    'El crupier salió a fumar. Intenta de nuevo.',
+    'Apuesta rechazada por exceso de optimismo.',
+  ],
   // ── Prompt question pool ────────────────────────────────────────────────────
   /**
    * The pool of questions the auto-scheduler (and pickNextPrompt) draws from.

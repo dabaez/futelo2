@@ -16,8 +16,11 @@
 const { db, stmts, requireUser } = require('../db/database');
 const {
   LOTTERY_START_COST,
-  LOTTERY_BET_AMOUNT,
   LOTTERY_DURATION_SEC,
+  GAMBLING_COINS_PER_LETTER,
+  GAMBLING_WIN_LETTERS,
+  GAMBLING_ERRORS,
+  MAX_LETTER_LEVEL,
 } = require('../config');
 
 const ALPHABET = 'abcdefghijklmnopqrstuvwxyzñ';
@@ -103,7 +106,11 @@ function startLottery(userId) {
 }
 
 /**
- * Place a bet for the calling user in the given round.
+ * Place a letter-based guess for the calling user in the given round.
+ * – 1st guess: always succeeds; letter level is removed from inventory.
+ * – Each subsequent guess: error probability = 1 - 0.5^k where k is the
+ *   number of guesses already placed by this user this round.
+ *   If the error fires the guess is rejected and the letter is NOT consumed.
  */
 function placeBet(userId, roundId, letter) {
   letter = String(letter).toLowerCase();
@@ -121,73 +128,105 @@ function placeBet(userId, roundId, letter) {
     if (Math.floor(Date.now() / 1000) > round.closes_at) {
       throw new Error('Se acabó el tiempo para apostar en esta ronda.');
     }
-    if (user.coins < LOTTERY_BET_AMOUNT) {
-      throw new Error(`Monedas insuficientes. Apostar cuesta ${LOTTERY_BET_AMOUNT} 🪙.`);
+
+    // User must have at least 1 inventory level of this letter
+    const inv = JSON.parse(user.inventory_json);
+    if ((inv[letter] || 0) < 1) {
+      throw new Error(`No tienes "${letter.toUpperCase()}" en tu inventario.`);
     }
+
+    // Escalating error probability: 1 - 0.5^(existing bet count)
+    const { count: existingBets } = stmts.getUserBetCountInRound.get(roundId, userId);
+    if (existingBets > 0) {
+      const errorProb = 1 - Math.pow(0.5, existingBets);
+      if (Math.random() < errorProb) {
+        const msg = GAMBLING_ERRORS[Math.floor(Math.random() * GAMBLING_ERRORS.length)];
+        throw new Error(msg);
+      }
+    }
+
+    // Deduct one level of the guessed letter from inventory
+    inv[letter] = Math.max(0, (inv[letter] || 0) - 1);
+    if (inv[letter] === 0) delete inv[letter];
+    stmts.updateInventory.run(JSON.stringify(inv), userId);
 
     const betResult = stmts.insertLotteryBet.run(roundId, userId, letter);
-    if (betResult.changes === 0) {
-      throw new Error('Ya apostaste en esta ronda.');
-    }
-
-    stmts.updateCoins.run(-LOTTERY_BET_AMOUNT, userId);
-    stmts.addJackpotToRound.run(LOTTERY_BET_AMOUNT, roundId);
-
-    const fresh = requireUser(userId);
-    const bet   = stmts.getLotteryBetById.get(betResult.lastInsertRowid);
+    const fresh     = requireUser(userId);
+    const bet       = stmts.getLotteryBetById.get(betResult.lastInsertRowid);
 
     return {
-      bet:      betPayload(bet),
-      newCoins: fresh.coins,
-      jackpot:  round.jackpot + LOTTERY_BET_AMOUNT,
+      bet:          betPayload(bet),
+      newInventory: JSON.parse(fresh.inventory_json),
+      jackpot:      round.jackpot,
     };
   })();
 }
 
 /**
- * Close a round, reveal the letter, pay out winners (or carry over).
- * Returns the result payload for broadcasting, or null if already closed.
+ * Close a round, reveal the secret letter, and distribute rewards.
+ * Winners (users who guessed the secret letter at least once):
+ *   – inventory[secret_letter] += GAMBLING_WIN_LETTERS (capped at MAX_LETTER_LEVEL)
+ *   – coins += round.jackpot + GAMBLING_COINS_PER_LETTER × (bets from ALL OTHER users)
+ *   No split: every winner receives the full reward independently.
+ * No winners: all bet letters convert to coins that carry over as jackpot.
  */
 function closeLottery(roundId) {
   const round = stmts.getLotteryRoundById.get(roundId);
   if (!round || round.status !== 'active') return null;
 
-  const bets    = stmts.getLotteryBets.all(roundId);
-  const winners = bets.filter((b) => b.letter === round.secret_letter);
+  const bets = stmts.getLotteryBets.all(roundId);
+  const winnerUserIds = [...new Set(
+    bets.filter((b) => b.letter === round.secret_letter).map((b) => b.user_id),
+  )];
 
   return db.transaction(() => {
     stmts.closeLotteryRound.run(roundId);
 
-    if (winners.length === 0) {
-      // Nobody won – carry the jackpot forward
-      setCarryOver(round.jackpot);
+    if (winnerUserIds.length === 0) {
+      // Nobody guessed correctly – convert all bet letters to coins and carry over
+      const totalCarry = round.jackpot + bets.length * GAMBLING_COINS_PER_LETTER;
+      setCarryOver(totalCarry);
       return {
         roundId,
         secretLetter: round.secret_letter,
-        jackpot:      round.jackpot,
+        jackpot:      totalCarry,
         winners:      [],
-        prize:        0,
         carryOver:    true,
       };
     }
 
-    // Winners split jackpot × 2
-    const prize = Math.floor((round.jackpot * 2) / winners.length);
-    winners.forEach((w) => stmts.updateCoins.run(prize, w.user_id));
-    setCarryOver(0);
+    // Pay each winner independently (full reward, no split)
+    const winnerResults = winnerUserIds.map((winnerId) => {
+      const otherBetCount = bets.filter((b) => b.user_id !== winnerId).length;
+      const coinsEarned   = round.jackpot + otherBetCount * GAMBLING_COINS_PER_LETTER;
 
+      stmts.updateCoins.run(coinsEarned, winnerId);
+
+      const winnerUser = requireUser(winnerId);
+      const inv        = JSON.parse(winnerUser.inventory_json);
+      inv[round.secret_letter] = Math.min(
+        (inv[round.secret_letter] || 0) + GAMBLING_WIN_LETTERS,
+        MAX_LETTER_LEVEL,
+      );
+      stmts.updateInventory.run(JSON.stringify(inv), winnerId);
+
+      const fresh = requireUser(winnerId);
+      return {
+        userId:       winnerId,
+        username:     fresh.username,
+        firstName:    fresh.first_name,
+        coinsEarned,
+        newInventory: JSON.parse(fresh.inventory_json),
+      };
+    });
+
+    setCarryOver(0);
     return {
       roundId,
       secretLetter: round.secret_letter,
       jackpot:      round.jackpot,
-      winners:      winners.map((w) => ({
-        userId:    w.user_id,
-        username:  w.username,
-        firstName: w.first_name,
-        letter:    w.letter,
-      })),
-      prize,
-      carryOver: false,
+      winners:      winnerResults,
+      carryOver:    false,
     };
   })();
 }
@@ -213,6 +252,5 @@ module.exports = {
   closeLottery,
   getCarryOver,
   LOTTERY_START_COST,
-  LOTTERY_BET_AMOUNT,
   LOTTERY_DURATION_SEC,
 };

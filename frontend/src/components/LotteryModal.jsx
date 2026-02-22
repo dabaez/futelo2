@@ -3,12 +3,17 @@ import { useState, useEffect, useCallback } from 'react';
 /**
  * LotteryModal
  * ─────────────
- * The letter lottery bottom-sheet.
+ * The letter gambling bottom-sheet.
+ *
+ * Betting costs a letter from your inventory (not coins).
+ * Players can throw multiple letters into the pot per round.
+ * Each bet after the first risks being rejected by the
+ * gambling-protection system (escalating random chance).
  *
  * States:
- *  – No active round: shows jackpot carryover + "Start lottery" button
- *  – Active round:    shows countdown, current bets grid, letter picker + bet button
- *  – Closed (brief):  parent handles via lottery_closed socket event
+ *  – No active round: shows jackpot carry-over + "Start" button
+ *  – Active round:    shows countdown, bets by letter, multi-bet letter picker
+ *  – Closed:         parent handles via lottery_closed socket event
  */
 
 const ALPHABET = 'abcdefghijklmnopqrstuvwxyzñ';
@@ -31,15 +36,16 @@ export default function LotteryModal({
   initData,
   coins,
   userId,
-  lotteryRound,      // { id, jackpot, closesAt, bets:[...] } or null
-  carryOver,         // accumulated jackpot from previous rounds
-  onLotteryStarted,  // (roundData) => void
-  onBetPlaced,       // (bet, jackpot) => void
+  inventory,     // { a: 3, b: 1, ... }
+  lotteryRound,  // { id, jackpot, closes_at, bets:[...] } or null
+  carryOver,     // accumulated jackpot from previous rounds
+  onLotteryStarted,
+  onBetPlaced,
   cfg,
 }) {
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState(null);
-  const [pick, setPick]         = useState(null);   // letter user is about to bet
+  const [loading, setLoading]         = useState(false);
+  const [error, setError]             = useState(null);
+  const [pick, setPick]               = useState(null);
   const [secondsLeft, setSecondsLeft] = useState(0);
 
   // ── Countdown timer ─────────────────────────────────────────────────────
@@ -54,14 +60,15 @@ export default function LotteryModal({
     return () => clearInterval(id);
   }, [lotteryRound?.closes_at]);
 
-  // Reset on close
+  // Reset error/pick on close
   useEffect(() => {
     if (!isOpen) { setError(null); setPick(null); }
   }, [isOpen]);
 
-  // ── Start lottery ───────────────────────────────────────────────────────
+  // ── Start round ─────────────────────────────────────────────────────────
   const handleStart = useCallback(async () => {
-    if (loading || coins < (cfg?.LOTTERY_START_COST || 200)) return;
+    const startCost = cfg?.LOTTERY_START_COST ?? 50;
+    if (loading || coins < startCost) return;
     setLoading(true); setError(null);
     try {
       const r = await fetch('/api/lottery/start', {
@@ -75,11 +82,12 @@ export default function LotteryModal({
     finally { setLoading(false); }
   }, [loading, coins, cfg, initData, onLotteryStarted]);
 
-  // ── Place bet ───────────────────────────────────────────────────────────
+  // ── Throw a letter ──────────────────────────────────────────────────────
   const handleBet = useCallback(async () => {
     if (!pick || loading || !lotteryRound) return;
-    if (coins < (cfg?.LOTTERY_BET_AMOUNT || 50)) {
-      setError(`Necesitas ${cfg?.LOTTERY_BET_AMOUNT || 50} 🪙 para apostar.`);
+    const inv = inventory || {};
+    if ((inv[pick] || 0) < 1) {
+      setError(`No tienes "${pick.toUpperCase()}" en tu inventario.`);
       return;
     }
     setLoading(true); setError(null);
@@ -95,23 +103,29 @@ export default function LotteryModal({
       setPick(null);
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
-  }, [pick, loading, lotteryRound, coins, cfg, initData, onBetPlaced]);
+  }, [pick, loading, lotteryRound, inventory, initData, onBetPlaced]);
 
   if (!isOpen) return null;
 
-  const startCost  = cfg?.LOTTERY_START_COST || 200;
-  const betAmount  = cfg?.LOTTERY_BET_AMOUNT  || 50;
-  const myBet      = lotteryRound?.bets?.find((b) => b.userId === userId);
-  // Compare against real timestamp so this is never wrong on first render
-  // (secondsLeft starts at 0, which would incorrectly flag as expired).
-  const isExpired  = !!lotteryRound && Math.floor(Date.now() / 1000) >= lotteryRound.closes_at;
+  const startCost = cfg?.LOTTERY_START_COST ?? 50;
+  const coinsPerLetter = cfg?.GAMBLING_COINS_PER_LETTER ?? 50;
+  const winLetters     = cfg?.GAMBLING_WIN_LETTERS ?? 2;
+  const inv            = inventory || {};
+  const isExpired      = !!lotteryRound && Math.floor(Date.now() / 1000) >= lotteryRound.closes_at;
 
-  // Group bets by letter for display
+  // My bets in this round
+  const myBets = (lotteryRound?.bets || []).filter((b) => b.userId === userId);
+
+  // Group ALL bets by letter for the overview
   const betsByLetter = {};
   (lotteryRound?.bets || []).forEach((b) => {
     if (!betsByLetter[b.letter]) betsByLetter[b.letter] = [];
-    betsByLetter[b.letter].push(b.firstName || b.username);
+    betsByLetter[b.letter].push(b.firstName || b.username || '?');
   });
+
+  // Potential jackpot if nobody wins (all bets × 50 coins + current jackpot seed)
+  const betCount = lotteryRound?.bets?.length ?? 0;
+  const potentialCarry = (lotteryRound?.jackpot ?? 0) + betCount * coinsPerLetter;
 
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center">
@@ -124,13 +138,13 @@ export default function LotteryModal({
         {/* Header */}
         <div className="flex items-center justify-between px-4 pt-4 pb-2 border-b border-tg-bg-sec shrink-0">
           <div>
-            <h2 className="font-bold text-tg-text text-base">🎲 Lotería de letras</h2>
+            <h2 className="font-bold text-tg-text text-base">🎲 Apuestas de letras</h2>
             {lotteryRound && (
               <p className="text-[11px] text-tg-hint">
                 Bote: <strong className="text-tg-text">{lotteryRound.jackpot} 🪙</strong>
-                {lotteryRound.jackpot > 0 && (
-                  <span className="ml-1 text-emerald-500 font-bold">
-                    → Premio: {lotteryRound.jackpot * 2} 🪙
+                {betCount > 0 && (
+                  <span className="ml-1 text-emerald-500 font-semibold">
+                    · {betCount} {betCount === 1 ? 'letra' : 'letras'} en juego
                   </span>
                 )}
               </p>
@@ -142,7 +156,9 @@ export default function LotteryModal({
         <div className="overflow-y-auto flex-1 p-4 flex flex-col gap-4">
 
           {error && (
-            <p className="text-xs text-red-500 text-center bg-red-50 rounded-lg px-3 py-2">{error}</p>
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-center">
+              <p className="text-xs text-amber-800 font-semibold">⚠️ {error}</p>
+            </div>
           )}
 
           {/* ── No active round ─────────────────────────────────────────── */}
@@ -150,19 +166,15 @@ export default function LotteryModal({
             <div className="flex flex-col items-center gap-3">
               {carryOver > 0 && (
                 <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-center w-full">
-                  <p className="text-xs text-amber-700 font-semibold">
-                    🏦 Bote acumulado de rondas anteriores
-                  </p>
+                  <p className="text-xs text-amber-700 font-semibold">🏦 Bote acumulado</p>
                   <p className="text-2xl font-bold text-amber-600">{carryOver} 🪙</p>
-                  <p className="text-[11px] text-amber-600 mt-0.5">
-                    → Premio si alguien gana: {(carryOver + startCost) * 2} 🪙
-                  </p>
                 </div>
               )}
-              <p className="text-sm text-tg-hint text-center">
-                Paga {startCost} 🪙 para iniciar una nueva ronda.{' '}
-                Se elige una letra al azar y los jugadores apuestan.
-              </p>
+              <div className="bg-tg-bg-sec rounded-xl px-4 py-3 text-sm text-tg-hint text-center w-full space-y-1">
+                <p>🎲 Cada apuesta cuesta <strong className="text-tg-text">una letra</strong> de tu inventario.</p>
+                <p>Adivina la letra secreta y gana <strong className="text-tg-text">+{winLetters} niveles</strong> de esa letra más <strong className="text-tg-text">{coinsPerLetter} 🪙</strong> por cada letra de los demás.</p>
+                <p className="text-[11px]">Segunda apuesta en adelante: protección antiapuestas activa.</p>
+              </div>
               <button
                 onClick={handleStart}
                 disabled={loading || coins < startCost}
@@ -183,65 +195,72 @@ export default function LotteryModal({
                   {formatSecs(secondsLeft)}
                 </div>
                 <div className="text-xs text-tg-hint">
-                  {isExpired ? '⏰ Cerrando…' : 'para apostar'}
+                  {isExpired ? '⏰ Cerrando…' : 'para adivinar'}
                 </div>
               </div>
 
-              {/* Current bets summary */}
+              {/* Bets summary by letter */}
               {Object.keys(betsByLetter).length > 0 && (
                 <div className="bg-tg-bg-sec rounded-xl p-3">
                   <p className="text-[11px] text-tg-hint mb-2 font-semibold">
-                    Apuestas ({lotteryRound.bets?.length || 0})
+                    Letras en juego ({betCount})
                   </p>
                   <div className="flex flex-wrap gap-2">
                     {Object.entries(betsByLetter).map(([letter, names]) => (
                       <div key={letter} className="bg-tg-bg rounded-lg px-2 py-1 flex items-center gap-1">
                         <span className="font-bold text-tg-text text-sm">{letter.toUpperCase()}</span>
-                        <span className="text-[10px] text-tg-hint">{names.join(', ')}</span>
+                        <span className="text-[10px] text-tg-hint">×{names.length}</span>
                       </div>
                     ))}
                   </div>
                 </div>
               )}
 
-              {/* Already bet */}
-              {myBet && (
-                <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 text-center">
-                  <p className="text-xs text-emerald-700 font-semibold">
-                    ✓ Tu apuesta: <span className="text-xl font-black">{myBet.letter.toUpperCase()}</span>
-                  </p>
-                  <p className="text-[11px] text-emerald-600 mt-0.5">
-                    Premio si aciertas:{' '}
-                    <strong>{Math.floor((lotteryRound.jackpot * 2) / (betsByLetter[myBet.letter]?.length || 1))} 🪙</strong>
-                  </p>
+              {/* My bets this round */}
+              {myBets.length > 0 && (
+                <div className="bg-tg-bg-sec rounded-xl p-3">
+                  <p className="text-[11px] text-tg-hint mb-1 font-semibold">Tus apuestas ({myBets.length})</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {myBets.map((b, i) => (
+                      <span key={i} className="bg-tg-bg border border-tg-button/30 rounded-lg px-2 py-1 text-sm font-bold text-tg-button">
+                        {b.letter.toUpperCase()}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               )}
 
-              {/* Letter picker (hidden if already bet or expired) */}
-              {!myBet && !isExpired && (
+              {/* Letter picker (hidden if expired) */}
+              {!isExpired && (
                 <div className="flex flex-col gap-3">
                   <p className="text-sm text-tg-hint text-center">
-                    Elige una letra y apuesta {betAmount} 🪙
+                    {myBets.length === 0
+                      ? 'Primera apuesta: siempre funciona'
+                      : `Apuesta #${myBets.length + 1}: mayor riesgo de protección antiapuestas`}
                   </p>
                   <div className="grid grid-cols-7 gap-1.5">
                     {ALPHABET.split('').map((l) => {
-                      const taken = betsByLetter[l] !== undefined;
+                      const stock = inv[l] || 0;
                       const sel   = pick === l;
+                      const noStock = stock < 1;
                       return (
                         <button
                           key={l}
-                          onClick={() => setPick(sel ? null : l)}
+                          onClick={() => !noStock && setPick(sel ? null : l)}
+                          disabled={noStock}
                           className={`
-                            rounded-lg py-2 text-sm font-bold transition-colors
-                            ${sel
-                              ? 'bg-tg-button text-tg-btn-text ring-2 ring-tg-button'
-                              : taken
-                                ? 'bg-tg-bg-sec text-tg-hint'
+                            relative rounded-lg py-2 text-sm font-bold transition-colors
+                            ${noStock
+                              ? 'bg-tg-bg-sec text-tg-hint opacity-30 cursor-not-allowed'
+                              : sel
+                                ? 'bg-tg-button text-tg-btn-text ring-2 ring-tg-button'
                                 : 'bg-tg-bg-sec text-tg-text active:opacity-70'}
                           `}
                         >
                           {l.toUpperCase()}
-                          {taken && <span className="block text-[8px] leading-none">●</span>}
+                          {!noStock && (
+                            <span className="block text-[8px] leading-none text-current opacity-70">{stock}</span>
+                          )}
                         </button>
                       );
                     })}
@@ -255,11 +274,13 @@ export default function LotteryModal({
                     {loading
                       ? 'Apostando…'
                       : pick
-                        ? `Apostar por "${pick.toUpperCase()}" — ${betAmount} 🪙`
+                        ? `Lanzar "${pick.toUpperCase()}" al bote`
                         : 'Elige una letra'}
                   </button>
 
-                  <p className="text-xs text-tg-hint text-center">Saldo: {coins} 🪙</p>
+                  <p className="text-[11px] text-tg-hint text-center">
+                    Ganador: +{winLetters} del acierto · +{coinsPerLetter} 🪙 por cada letra de los demás
+                  </p>
                 </div>
               )}
             </>
@@ -269,3 +290,4 @@ export default function LotteryModal({
     </div>
   );
 }
+

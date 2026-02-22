@@ -49,7 +49,7 @@ const {
 const {
   startLottery, placeBet, closeLottery,
   getActiveLottery, getLotteryWithBets, getCarryOver,
-  LOTTERY_START_COST, LOTTERY_BET_AMOUNT,
+  LOTTERY_START_COST,
 }                                        = require('./engine/lottery');
 const {
   getCurrentHeat, addHeat, catchProbability, runCatchCheck,
@@ -163,9 +163,10 @@ app.get('/api/config', (_req, res) => {
     SELL_BASE_PRICE:        config.SELL_BASE_PRICE,
     MARKET_MAX_PRICE:       config.MARKET_MAX_PRICE,
     MARKET_COMMISSION:      config.MARKET_COMMISSION,
-    LOTTERY_START_COST:     config.LOTTERY_START_COST,
-    LOTTERY_BET_AMOUNT:     config.LOTTERY_BET_AMOUNT,
-    LOTTERY_DURATION_SEC:   config.LOTTERY_DURATION_SEC,
+    LOTTERY_START_COST:            config.LOTTERY_START_COST,
+    LOTTERY_DURATION_SEC:          config.LOTTERY_DURATION_SEC,
+    GAMBLING_COINS_PER_LETTER:     config.GAMBLING_COINS_PER_LETTER,
+    GAMBLING_WIN_LETTERS:          config.GAMBLING_WIN_LETTERS,
     // ── Black market heat (live values) ──
     BM_HEAT_MAX:            config.BM_HEAT_MAX,
     BM_BASE_CATCH_PROB:     config.BM_BASE_CATCH_PROB,
@@ -485,9 +486,8 @@ app.post('/api/lottery/bet', authMiddleware, (req, res) => {
     const result = placeBet(req.tgUser.id, roundId, letter);
     io.emit('lottery_bet_placed', { roundId, bet: result.bet, jackpot: result.jackpot });
     io.to(`user:${req.tgUser.id}`).emit('user_update', {
-      newCoins:  result.newCoins,
-      coinDelta: -LOTTERY_BET_AMOUNT,
-      newLetters: [],
+      newInventory: result.newInventory,
+      newLetters:   [],
     });
     res.json(result);
   } catch (err) {
@@ -709,13 +709,14 @@ if (require.main === module) {
     if (activeLottery && nowSec >= activeLottery.closes_at) {
       const lResult = closeLottery(activeLottery.id);
       if (lResult) {
-        // Emit winner updates before broadcast so balances are current
+        // Notify each winner of their coins + inventory gain
         lResult.winners.forEach((w) => {
           const fresh = requireUser(w.userId);
           io.to(`user:${w.userId}`).emit('user_update', {
-            newCoins:  fresh.coins,
-            coinDelta: lResult.prize,
-            newLetters: [],
+            newCoins:     fresh.coins,
+            coinDelta:    w.coinsEarned,
+            newInventory: w.newInventory,
+            newLetters:   [],
           });
         });
         io.emit('lottery_closed', lResult);

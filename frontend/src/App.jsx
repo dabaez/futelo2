@@ -58,7 +58,7 @@ export default function App() {
   // ── Lottery state ─────────────────────────────────────────────────
   const [lotteryRound,    setLotteryRound]    = useState(null);
   const [lotteryCarryOver, setLotteryCarryOver] = useState(0);
-  const [lotteryCfg,      setLotteryCfg]      = useState({ LOTTERY_START_COST: 200, LOTTERY_BET_AMOUNT: 50 });
+  const [lotteryCfg,      setLotteryCfg]      = useState({ LOTTERY_START_COST: 50, GAMBLING_COINS_PER_LETTER: 50, GAMBLING_WIN_LETTERS: 2 });
 
   // ── Prompt state ────────────────────────────────────────────────────────
   const [prompt,      setPrompt]      = useState(null);   // { id, text, closesAt }
@@ -219,9 +219,10 @@ export default function App() {
       } else {
         setLotteryCarryOver(0);
         const names = result.winners.map((w) => w.firstName || w.username).join(', ');
-        showToast(`🎉 ¡${names} acertó la "${result.secretLetter.toUpperCase()}"! +${result.prize} 🪙`, 'success', { duration: 6000 });
+        const coins = result.winners[0]?.coinsEarned ?? 0;
+        showToast(`🎉 ¡${names} acertó la "${result.secretLetter.toUpperCase()}"! +${coins} 🪙 +letras`, 'success', { duration: 6000 });
         if (user && result.winners.some((w) => w.userId === user.id)) {
-          updateUser({ newCoins: (user.coins || 0) + result.prize });
+          // user_update socket event handles coins + inventory; toast is enough here
         }
       }
     };
@@ -334,7 +335,7 @@ export default function App() {
     setLotteryRound((prev) => {
       if (!prev) return prev;
       const bets = prev.bets || [];
-      return { ...prev, jackpot, bets: [...bets.filter((b) => b.userId !== bet.userId), bet] };
+      return { ...prev, jackpot, bets: [...bets, bet] };
     });
   }, []);
   // ── Dev mode: show user picker when there is no session yet ──────────────
@@ -482,6 +483,7 @@ export default function App() {
         initData={initData}
         coins={user?.coins ?? 0}
         userId={user?.id}
+        inventory={inventory}
         lotteryRound={lotteryRound}
         carryOver={lotteryCarryOver}
         onLotteryStarted={handleLotteryStarted}
