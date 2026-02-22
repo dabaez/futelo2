@@ -35,9 +35,9 @@ futelo/
 │   │   ├── db/
 │   │   │   └── database.js        SQLite schema, WAL config, prepared stmts
 │   │   ├── engine/
-│   │   │   ├── processMessage.js  Game engine + shopRoll() + sellLetter()
-│   │   │   ├── promptEngine.js    Community prompt lifecycle
-│   │   │   └── blackMarket.js     Black market listing / heat / sweep engine
+│   │   │   ├── processMessage.js  Game engine + shopRoll()
+│   │   │   ├── market.js          P2P marketplace engine (factory pattern; powers BOTH markets)
+│   │   │   └── promptEngine.js    Community prompt lifecycle
 │   │   └── bot/
 │   │       ├── bot.js             grammY bot (gatekeeper + mirror)
 │   │       └── auth.js            Telegram initData HMAC validator
@@ -56,12 +56,13 @@ futelo/
 │   │   │   ├── PromptBanner.jsx   Collapsible prompt panel (timer, replies, votes)
 │   │   │   ├── RestrictedKeyboard.jsx  Custom 4-row keyboard with inventory limits
 │   │   │   ├── ShopModal.jsx      Letter roll + prompt fire bottom-sheet
+│   │   │   ├── BlackMarketModal.jsx  Secret P2P market (dark-themed, triple-tap access)
 │   │   │   └── DevUserPicker.jsx  Dev-only user picker (no Telegram needed)
 │   │   ├── hooks/
 │   │   │   ├── useAuth.js         POST /api/auth on mount, exposes updateUser()
 │   │   │   └── useSocket.js       Socket.io connection manager
 │   │   ├── __tests__/
-│   │   │   ├── RestrictedKeyboard.test.jsx  14 tests (Vitest + RTL)
+│   │   │   ├── RestrictedKeyboard.test.jsx  20 tests (Vitest + RTL)
 │   │   │   └── MessageBubble.test.jsx       15 tests (Vitest + RTL)
 │   │   └── test/
 │   │       └── setup.js           @testing-library/jest-dom import
@@ -92,30 +93,28 @@ includes live values: `heat` (current heat level) and `catchProbPerMin`
 
 ```js
 module.exports = {
-  STARTING_COINS:       100,
+  STARTING_COINS:       0,
+  STARTING_INVENTORY:   JSON.stringify({ a: 1, h: 1, l: 1, o: 1 }),  // letters for "HOLA"
+  FIRST_MESSAGE_LETTERS: 26,          // one-time starter pack on first message
   TIER1_COINS:          10,
-  TIER1_LETTERS:        2,
   TIER3_PENALTY:        50,
   LOCK_DURATION_SEC:    5 * 60,
   ROLL_COST:            50,
   ROLL_COUNT:           3,
+  MAX_LETTER_LEVEL:     6,          // hard cap on any single letter's unlock level
+  /**
+   * Characters in the shared `_symbols` inventory group.
+   * Must match SYMBOL_CHARS in RestrictedKeyboard.jsx.
+   */
+  SYMBOL_CHARS:         '!?.,:-()@#&*',
   PROMPT_DURATION_SEC:  3 * 60,
   PROMPT_WINNER_BONUS:  100,
   PROMPT_RUNNER_UP_BONUS: 30,
   PROMPT_BUY_COST:      200,
   INACTIVITY_SEC:       24 * 60 * 60,
-  // ── Letter market ──
-  SELL_BASE_PRICE:       15,        // coins for a normal or BM sale
-  SELL_COMMISSION_RATE:  0.20,      // tax taken on normal market
-  // ── Black market heat system ──
-  BLACK_MARKET_FINE:        40,     // coin penalty when caught
-  BLACK_MARKET_BASE_PROB:   0.04,   // catch prob/min at heat = 0  (4 %)
-  BLACK_MARKET_MAX_PROB:    0.80,   // hard ceiling for catch prob (80 %)
-  HEAT_CATCH_INCREMENT:     0.20,   // heat spike per catch
-  HEAT_MENTION_INCREMENT:   0.08,   // heat spike per "mercado negro" mention
-  HEAT_DECAY_RATE:          0.90,   // multiplier applied each minute
-  HEAT_MAX:                 1.0,    // clamp ceiling
-  BLACK_MARKET_LISTING_SEC: 10 * 60, // seconds before an uncollected listing expires
+  // ── P2P letter market ──
+  SELL_BASE_PRICE:       15,        // default suggested listing price hint
+  MARKET_MAX_PRICE:      500,       // maximum allowed listing price
   PROMPT_POOL:          [ /* 20 Spanish questions */ ],
 };
 ```
@@ -143,13 +142,14 @@ picks up the new values on next page load via `GET /api/config`.
 | Table | Purpose |
 |---|---|
 | `users` | One row per Telegram user. `inventory_json` is a JSON string `{"a":3,"b":1,...}`. |
-| `game_state` | Key/value. Holds `last_sender_id` and `black_market_heat`. |
+| `game_state` | Key/value. Holds `last_sender_id`. |
 | `messages` | Persisted chat log used to hydrate the feed on load. |
 | `letter_locks` | Active Tier-3 penalties per user. `locked_until` is a Unix timestamp. |
 | `prompts` | One row per prompt round. `status`: `active` or `closed`. |
 | `prompt_replies` | Replies to a prompt. Each row has `user_id`, `text`, `vote_count`. |
 | `prompt_votes` | One vote per `(reply_id, voter_id)` pair — enforces one-vote-per-user. |
-| `black_market_listings` | One row per BM listing. `status`: `pending` / `collected` / `caught` / `expired`. `coins_delta` stores the final payout or fine amount. |
+| `market_listings` | One row per P2P listing. `status`: `open` / `sold` / `cancelled`. Columns: `seller_id`, `letter`, `price`, `buyer_id`, `listed_at`, `resolved_at`. |
+| `black_market_listings` | Identical schema to `market_listings` but completely separate table. Used by the secret black market accessed via the triple-tap easter egg. |
 
 #### Prepared Statements
 
@@ -161,17 +161,26 @@ keeps query compilation cost to zero per request and avoids re-parsing.
 const { db, stmts, upsertUser, requireUser } = require('../db/database');
 ```
 
-Black-market prepared statements (also in `stmts`):
+P2P market prepared statements (also in `stmts`):
 
 | Statement | What it does |
 |---|---|
-| `insertBmListing` | Inserts a new `pending` listing row, returns `lastInsertRowid`. |
-| `getBmListing` | Fetches one listing by `id`. |
-| `getActiveBmListing` | Finds an active (`pending`) listing for a `(userId, letter)` pair. |
-| `getPendingBmListings` | Returns all listings with `status = 'pending'`. |
-| `getExpiredBmListings` | Returns pending listings older than the provided Unix cutoff. |
-| `resolveBmListing` | Updates `status`, `coins_delta`, and `resolved_at` by `id`. |
-| `getUserBmListings` | Returns a user's 20 most recent listings (any status). |
+| `insertMarketListing` | Inserts a new `open` listing, returns `lastInsertRowid`. |
+| `getMarketListing` | Fetches one listing by `id`. |
+| `getOpenMarketListings` | Returns all `open` listings joined with seller username/first_name. |
+| `getActiveSellerListing` | Finds an open listing for a `(sellerId, letter)` pair — used to detect duplicates. |
+| `resolveMarketListing` | Updates `status`, `buyer_id`, and `resolved_at` by `id`. |
+| `getUserMarketListings` | Returns a user's 20 most recent listings (any status). |
+
+Black market prepared statements (mirror set, separate table):
+
+| Statement | What it does |
+|---|---|
+| `insertBmListing` | Same as `insertMarketListing` but writes to `black_market_listings`. |
+| `getBmListing` | Fetches one BM listing by `id`. |
+| `getOpenBmListings` | Returns all open BM listings with seller names. |
+| `resolveBmListing` | Resolves a BM listing (sold / cancelled). |
+| `getUserBmListings` | Returns a user's 20 most recent BM listings. |
 
 ### Game Engine (`backend/src/engine/processMessage.js`)
 
@@ -184,11 +193,15 @@ Letters are NEVER consumed — they are unlock levels.
 
 **Coin tiers** (checked in `processMessage(userId, text)`):
 
-| Condition | Tier | Coins | Letters |
-|---|---|---|---|
-| `last_sender_id !== userId` | 1 | +`TIER1_COINS` (10) | `TIER1_LETTERS` (2) random |
-| Same user, `streak_count + 1 == 2` | 2 | 0 | 0 (warning) |
-| Same user, `streak_count + 1 >= 3` | 3 | −`TIER3_PENALTY` (50) | 0 + lock 1 random letter for `LOCK_DURATION_SEC` (5 min) |
+| Condition | Tier | Coins |
+|---|---|---|
+| `last_sender_id !== userId` | 1 | +`TIER1_COINS` (10) |
+| Same user, `streak_count + 1 == 2` | 2 | 0 (warning) |
+| Same user, `streak_count + 1 >= 3` | 3 | −`TIER3_PENALTY` (50) + lock 1 random letter for `LOCK_DURATION_SEC` (5 min) |
+
+**No letters are granted by tiers.** Letters are only obtained two ways:
+1. **First-message bonus** — on a user's very first message (message count = 0 before insert), `FIRST_MESSAGE_LETTERS` (26) random letters are added to their inventory. One-time per user.
+2. **Shop roll** — spending coins via `shopRoll()`.
 
 **Critical invariant**: every call to `processMessage` wraps **all** DB writes
 in a single `db.transaction()`. Do not split the writes — partial state is a
@@ -199,38 +212,37 @@ Exported:
   failure; returns a rich result object on success.
 - `shopRoll(userId)` — costs `ROLL_COST` coins, unlocks `ROLL_COUNT` random
   letters. Both values come from `config.js`.
-- `sellLetter(userId, letter)` — normal market sell: deducts one letter level,
-  awards `floor(SELL_BASE_PRICE × (1 − SELL_COMMISSION_RATE))` coins instantly.
-  Throws on invalid letter or zero inventory.
-- `letterRequirements(text)` — pure helper, returns `{a:1, p:2, ...}`.
+- `letterRequirements(text)` — pure helper, returns `{a:1, p:2, _numbers:1, _symbols:2, ...}`.
+  Digits (0-9) are summed into `_numbers`; characters in `SYMBOL_CHARS` are summed into `_symbols`.
 
-### Black Market Engine (`backend/src/engine/blackMarket.js`)
+### P2P Market Engine (`backend/src/engine/market.js`)
 
-Manages the letter escrow/listing lifecycle, global heat, and per-minute catch
-sweeps. All constants come from `config.js`.
+Manages both the regular player-to-player market and the secret **black market**.
+Coins flow directly from buyer to seller — no coins are created from thin air.
+All constants come from `config.js`.
 
-**Heat formula:**
-```
-catch_prob / min = min(BASE_PROB × (1 + heat × 15), MAX_PROB)
-heat = 0.0  →  4 %    heat = 0.5  →  34 %    heat = 1.0  →  64 %
-```
-
-**Heat inputs:**
-- Listing caught by server sweep: `heat += HEAT_CATCH_INCREMENT` (0.20)
-- "mercado negro" mentioned in chat: `heat += HEAT_MENTION_INCREMENT` (0.08)
-- Each sweep cycle (every 60 s): `heat *= HEAT_DECAY_RATE` (0.90)
+**Factory pattern**: `makeMarket(s)` produces all five functions bound to a specific
+set of prepared statements. The two instances are:
+- `regularMarket` — backed by `market_listings` stmts
+- `blackMarket` — backed by `black_market_listings` stmts
 
 Exported functions:
 
-| Function | Description |
-|---|---|
-| `listLetter(userId, letter)` | Escrows one letter level, creates a `pending` listing. Throws if letter is invalid, inventory is zero, or the letter is already listed. Returns `{ listingId, letter, listedAt, heat, catchProbPerMin, expiresIn, newInventory }`. |
-| `collectListing(userId, listingId)` | Awards `SELL_BASE_PRICE` coins to the owner while the listing is still `pending`. Throws for wrong owner or non-pending status. |
-| `sweepCatchRolls()` | Called every 60 s. Expires stale listings (returns letters), decays heat, rolls pending listings. Returns `{ caught: [...], expired: [...] }`. |
-| `getUserListings(userId)` | Returns the user's 20 most recent listings (any status). |
-| `addMentionHeat()` | Bumps heat by `HEAT_MENTION_INCREMENT`; called when "mercado negro" appears in chat. |
-| `getHeat()` | Reads current heat from `game_state`; returns 0 if no row. |
-| `catchProbForHeat(heat)` | Pure formula — returns the per-minute catch probability for a given heat value. |
+| Function | Market | Description |
+|---|---|---|
+| `listLetter(sellerId, letter, price)` | regular | Escrows one letter level, creates an `open` listing. |
+| `buyListing(buyerId, listingId)` | regular | Transfers coins buyer→seller, grants letter. |
+| `cancelListing(sellerId, listingId)` | regular | Returns escrowed letter, cancels listing. |
+| `getOpenListings()` | regular | All open listings with seller names. |
+| `getUserListings(userId)` | regular | User's 20 most recent listings (any status). |
+| `bmListLetter(sellerId, letter, price)` | black | Same as `listLetter` on the BM table. |
+| `bmBuyListing(buyerId, listingId)` | black | Same as `buyListing` on the BM table. |
+| `bmCancelListing(sellerId, listingId)` | black | Same as `cancelListing` on the BM table. |
+| `getBmOpenListings()` | black | Open BM listings with seller names. |
+| `getBmUserListings(userId)` | black | User's 20 most recent BM listings. |
+
+All buy/list/cancel functions throw a user-facing `Error` on validation failure.
+All write operations are wrapped in `db.transaction()` for atomicity.
 
 ### Prompt Engine (`backend/src/engine/promptEngine.js`)
 
@@ -273,21 +285,24 @@ All endpoints are defined in `server.js`.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/api/config` | none | Public game constants (prices, rewards, durations, live heat) |
+| GET | `/api/config` | none | Public game constants (prices, rewards, durations) |
 | POST | `/api/auth` | initData header | Upsert user, return profile |
 | GET | `/api/me` | initData header | Current user profile + locks |
 | GET | `/api/messages?limit=N` | none | Last N messages (default 50, max 200) |
 | POST | `/api/message` | initData header | Send a message via the engine |
 | POST | `/api/shop/roll` | initData header | Buy a letter roll |
-| POST | `/api/shop/sell` | initData header | Sell a letter on the normal market (body: `{ letter }`) |
 | POST | `/api/shop/prompt` | initData header | Buy and fire a community prompt |
-| GET | `/api/prompts/active` | none | Active prompt + replies (or 404) |
-| POST | `/api/prompts/:id/reply` | initData header | Submit a reply to a prompt |
-| POST | `/api/prompts/replies/:replyId/vote` | initData header | Cast a vote on a reply |
-| GET | `/api/blackmarket/heat` | none | Current heat level + catch probability |
-| GET | `/api/blackmarket/listings` | initData header | Caller's 20 most recent BM listings |
-| POST | `/api/blackmarket/list` | initData header | Escrow a letter on the black market (body: `{ letter }`) |
-| POST | `/api/blackmarket/collect/:id` | initData header | Collect coins from a pending listing |
+| GET | `/api/prompt/active` | none | Active prompt + replies (or 404) |
+| GET | `/api/market/listings` | none | All open P2P listings (with seller names) |
+| GET | `/api/market/my-listings` | initData header | Caller's 20 most recent listings (any status) |
+| POST | `/api/market/list` | initData header | Create a listing (body: `{ letter, price }`) |
+| POST | `/api/market/buy/:id` | initData header | Buy a listing — coins transfer buyer → seller |
+| POST | `/api/market/cancel/:id` | initData header | Cancel own open listing, recover escrowed letter |
+| GET | `/api/bm/listings` | none | Open **black market** listings (with seller names) |
+| GET | `/api/bm/my-listings` | initData header | Caller's 20 most recent BM listings |
+| POST | `/api/bm/list` | initData header | Create a BM listing (body: `{ letter, price }`) |
+| POST | `/api/bm/buy/:id` | initData header | Buy a BM listing — coins transfer buyer → seller |
+| POST | `/api/bm/cancel/:id` | initData header | Cancel own open BM listing, recover letter |
 
 Auth is sent as the `x-init-data` HTTP header **or** `body.initData`.
 
@@ -301,6 +316,7 @@ Auth is sent as the `x-init-data` HTTP header **or** `body.initData`.
 | Event | Payload | Effect |
 |---|---|---|
 | `send_message` | `{ text }` | Engine validates → `new_message` broadcast |
+| `submit_prompt_reply` | `{ promptId, text }` | Adds a reply → `new_prompt_reply` broadcast |
 | `vote_reply` | `{ replyId }` | Records vote → `vote_update` broadcast |
 
 **Server → Client (broadcast to all):**
@@ -312,7 +328,12 @@ Auth is sent as the `x-init-data` HTTP header **or** `body.initData`.
 | `new_prompt_reply` | Reply object added to active prompt |
 | `vote_update` | `{ replyId, voteCount }` |
 | `prompt_closed` | `{ promptId, winner, runnerUp }` |
-| `bm_heat_update` | `{ heat, catchProbPerMin }` — emitted when heat changes (mention, catch, sweep) |
+| `new_market_listing` | `{ listingId, letter, price, sellerName }` — new open listing appeared |
+| `market_listing_sold` | `{ listingId, letter, price }` — listing purchased |
+| `market_listing_cancelled` | `{ listingId }` — listing removed by seller |
+| `bm_new_listing` | `{ listingId, letter, price, sellerName }` — new open **black market** listing |
+| `bm_listing_sold` | `{ listingId, letter, price }` — BM listing purchased |
+| `bm_listing_cancelled` | `{ listingId }` — BM listing removed by seller |
 
 **Server → Client (sender only):**
 
@@ -321,8 +342,6 @@ Auth is sent as the `x-init-data` HTTP header **or** `body.initData`.
 | `user_update` | `{ newCoins, newInventory, newLetters, lockedLetter, tier, coinDelta }` |
 | `rejected_message` | `{ reason }` |
 | `prompt_error` | `{ reason }` |
-| `bm_caught` | `{ listingId, letter, fine, newCoins, newInventory }` — listing caught in sweep |
-| `bm_expired` | `{ listingId, letter, newInventory }` — listing expired, letter returned |
 
 ---
 
@@ -356,8 +375,14 @@ App.jsx
  ├── ChatFeed                     ← reads socket for new_message events
  ├── PromptBanner                 ← prompt, promptReplies, replyMode, handleVote
  ├── RestrictedKeyboard           ← reads inventory + lockedLetters from user
- └── ShopModal                    ← calls /api/shop/roll or /api/shop/prompt
+ ├── ShopModal                    ← calls /api/shop/roll or /api/shop/prompt
+ └── BlackMarketModal             ← secret P2P market (triple-tap Header shop button)
 ```
+
+**Triple-tap secret (black market):** `handleShopClick` in `App.jsx` uses
+`shopClicksRef` (count) and `shopClickTimerRef` (timeout) refs. Click 1 opens
+`ShopModal` and starts a 1500 ms reset timer. If a 3rd click arrives within
+that window, `ShopModal` is closed and `BlackMarketModal` opens instead.
 
 Socket events App.jsx handles for prompts:
 - `new_prompt` → sets `prompt` state, clears replies.
@@ -458,10 +483,11 @@ To simulate two players:
    new write inside `processMessage`, add it inside the existing transaction
    closure, not after it.
 
-3. **Letters are unlock levels, not consumables.** `inventory[L]` is never
-   decremented by sending a message. It only increases (from Tier-1 rewards or
-   shop rolls). The keyboard disables a key when `draftCount[L] >= inventory[L]`,
-   but sending the message leaves the inventory unchanged.
+3. **Letters are unlock levels, not consumables, and are capped at `MAX_LETTER_LEVEL` (6).**
+   `inventory[L]` is never decremented by sending a message. It only increases (from the
+   first-message bonus or shop rolls — tiers never grant letters), and is always clamped
+   to `MAX_LETTER_LEVEL` on every increment. The keyboard disables a key when
+   `draftCount[L] >= inventory[L]`, but sending the message leaves the inventory unchanged.
 
 4. **WAL mode.** Do not change `journal_mode`. The server's concurrency model
    (Socket.io events + HTTP requests sharing one DB connection) depends on
@@ -473,6 +499,15 @@ To simulate two players:
 6. **All game constants live in `backend/src/config.js`.** Do not hardcode
    values like `50`, `100`, or `200` in engine, database, or server files.
    Import from config. The frontend fetches them via `GET /api/config`.
+
+7. **Coins can never go below zero.** Both `updateCoins` and `updateUser`
+   prepared statements use `MAX(0, coins + ?)` / `MAX(0, coins + @coinDelta)`
+   at the SQL level, so no engine path (Tier-3 penalty, market purchase) can
+   produce a negative balance. Do not change these statements to plain addition.
+
+8. **Market coin transfers are atomic.** `buyListing` wraps the debit (buyer),
+   credit (seller), inventory update, and listing resolution inside a single
+   `db.transaction()`. Do not add awaits or split the writes.
 
 ---
 
@@ -505,31 +540,31 @@ To simulate two players:
 
 - Config: `backend/jest.config.js` (`testEnvironment: 'node'`, `maxWorkers: 1`)
 - Run: `cd backend && npm test`
-- **82 tests across 4 suites** (all passing)
+- **101 tests across 4 suites** (all passing)
 
 | File | Tests | What it covers |
 |---|---|---|
 | `src/__tests__/auth.test.js` | 12 | `validateInitData` HMAC, `validateInitDataDev` dev tokens |
-| `src/__tests__/engine.test.js` | 22 | `letterRequirements`, all 3 tiers, `shopRoll`, `sellLetter`, ñ support, transaction shape |
-| `src/__tests__/blackMarket.test.js` | 24 | Heat helpers, `listLetter`, `collectListing`, `sweepCatchRolls`, Math.random spy |
-| `src/__tests__/api.test.js` | 24 | All REST endpoints incl. sell + black market, end-to-end with temp SQLite DB |
+| `src/__tests__/engine.test.js` | 29 | `letterRequirements` (incl. `_numbers`/`_symbols`), all 3 tiers, coin floor, letter level cap, `shopRoll`, ñ support, transaction shape |
+| `src/__tests__/market.test.js` | 23 | `listLetter`, `buyListing`, `cancelListing`, `getOpenListings`, `getUserListings`, coin/letter cap invariants; BM factory isolation (`bmListLetter`, `bmCancelListing`, `getBmOpenListings`, `getBmUserListings`) |
+| `src/__tests__/api.test.js` | 37 | All REST endpoints incl. P2P market + full BM endpoint flow, end-to-end with temp SQLite DB |
 
 **Key patterns:**
 - `FUTELO_DATA_DIR` env override points the DB to a temp directory per test run.
 - `server.js` is guarded with `require.main === module` so supertest can import it without binding a port.
-- `jest.resetAllMocks()` in `beforeEach` (not `clearAllMocks`) to wipe `mockReturnValueOnce` queues.
+- `jest.resetAllMocks()` in `beforeEach` (not `clearAllMocks`) to wipe `mockReturnValueOnce` queues. Also re-set `db.transaction.mockImplementation(fn => () => fn())` at the top of each `beforeEach` in `market.test.js`.
 - API tests set `process.env.BOT_TOKEN = ''` before `jest.resetModules()` to prevent grammY from starting.
-- User token constants: `ALICE='dev:1001:…'`, `BOB='dev:1002:…'`, `DAVE='dev:1004:…'` (sell tests), `EVE='dev:1005:…'` (BM tests). Use fresh users for new suites to avoid state conflicts with earlier tests.
+- User token constants: `ALICE='dev:1001:…'`, `BOB='dev:1002:…'`, `DAVE='dev:1004:…'` (market buyer), `EVE='dev:1005:…'` (market seller), `FRANK='dev:1006:…'` (BM tests only). Use fresh users for new suites to avoid state conflicts with earlier tests.
 
 ### Frontend — Vitest + Testing Library
 
 - Config: `test:` block in `frontend/vite.config.js` (`environment: 'jsdom'`)
 - Run: `cd frontend && npm test`
-- **29 tests across 2 suites** (all passing)
+- **35 tests across 2 suites** (all passing)
 
 | File | Tests | What it covers |
 |---|---|---|
-| `src/__tests__/RestrictedKeyboard.test.jsx` | 14 | Rendering, badges, disabled states, pointer interactions |
+| `src/__tests__/RestrictedKeyboard.test.jsx` | 20 | Rendering, badges (letters + number/symbol group pools), disabled states, pointer interactions |
 | `src/__tests__/MessageBubble.test.jsx` | 15 | Text, sender names, coin delta badges, tier labels, layout |
 
 **Key patterns:**
