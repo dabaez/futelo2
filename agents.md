@@ -35,9 +35,11 @@ futelo/
 │   │   ├── db/
 │   │   │   └── database.js        SQLite schema, WAL config, prepared stmts
 │   │   ├── engine/
-│   │   │   ├── processMessage.js  Game engine + shopRoll()
+│   │   │   ├── processMessage.js  Game engine + shopRoll() (lootbox)
 │   │   │   ├── market.js          P2P marketplace engine (factory pattern; powers BOTH markets)
-│   │   │   └── promptEngine.js    Community prompt lifecycle
+│   │   │   ├── promptEngine.js    Community prompt lifecycle
+│   │   │   ├── lottery.js         Letter-gambling round engine
+│   │   │   └── blackMarket.js     Black market heat / catch mechanic
 │   │   └── bot/
 │   │       ├── bot.js             grammY bot (gatekeeper + mirror)
 │   │       └── auth.js            Telegram initData HMAC validator
@@ -52,11 +54,12 @@ futelo/
 │   │   ├── components/
 │   │   │   ├── Header.jsx         Coin balance, connection dot, Shop button
 │   │   │   ├── ChatFeed.jsx       Scrollable feed (REST hydrate + Socket.io)
-│   │   │   ├── MessageBubble.jsx  Single chat bubble (own/other + tier badge)
+│   │   │   ├── MessageBubble.jsx  Single chat bubble (own/other + tier badge + system pill)
 │   │   │   ├── PromptBanner.jsx   Collapsible prompt panel (timer, replies, votes)
 │   │   │   ├── RestrictedKeyboard.jsx  Custom 4-row keyboard with inventory limits
-│   │   │   ├── ShopModal.jsx      Letter roll + prompt fire bottom-sheet
+│   │   │   ├── ShopModal.jsx      Lootbox roll + P2P market + prompt bottom-sheet
 │   │   │   ├── BlackMarketModal.jsx  Secret P2P market (dark-themed, triple-tap access)
+│   │   │   ├── LotteryModal.jsx   Letter-gambling round modal
 │   │   │   └── DevUserPicker.jsx  Dev-only user picker (no Telegram needed)
 │   │   ├── hooks/
 │   │   │   ├── useAuth.js         POST /api/auth on mount, exposes updateUser()
@@ -87,39 +90,67 @@ futelo/
 
 **The single source of truth for every game constant.** All other backend files
 import from here. The `/api/config` endpoint exposes public values to the
-frontend so `ShopModal` never needs updating when prices change. It also
-includes live values: `heat` (current heat level) and `catchProbPerMin`
-(current catch probability per minute).
+frontend. The response also includes live values (`heat`, `catchProb`) from the
+black market engine.
 
 ```js
 module.exports = {
   STARTING_COINS:       0,
-  STARTING_INVENTORY:   JSON.stringify({ a: 1, h: 1, l: 1, o: 1 }),  // letters for "HOLA"
-  FIRST_MESSAGE_LETTERS: 26,          // one-time starter pack on first message
+  STARTING_INVENTORY:   JSON.stringify({ a: 1, h: 1, l: 1, o: 1 }),
+  FIRST_MESSAGE_LETTERS: 26,
   TIER1_COINS:          10,
   TIER3_PENALTY:        50,
   LOCK_DURATION_SEC:    5 * 60,
-  ROLL_COST:            50,
-  ROLL_COUNT:           3,
-  MAX_LETTER_LEVEL:     6,          // hard cap on any single letter's unlock level
-  /**
-   * Characters in the shared `_symbols` inventory group.
-   * Must match SYMBOL_CHARS in RestrictedKeyboard.jsx.
-   */
+
+  // ── Lootbox shop ──
+  ROLL_COST:            50,         // base cost (scales: +ROLL_COST_SCALE per total inventory level)
+  ROLL_COST_SCALE:      2,
+  LOOTBOX_TIERS: [
+    { name: 'común',      letters: 1,  weight: 40 },
+    { name: 'bueno',      letters: 3,  weight: 35 },
+    { name: 'raro',       letters: 5,  weight: 18 },
+    { name: 'épico',      letters: 8,  weight: 6  },
+    { name: 'legendario', letters: 12, weight: 1  },
+  ],
+  MAX_LETTER_LEVEL:     6,
   SYMBOL_CHARS:         '!?.,:-()@#&*',
-  PROMPT_DURATION_SEC:  3 * 60,
+
+  // ── Prompts ──
+  PROMPT_DURATION_SEC:  60 * 60,
   PROMPT_WINNER_BONUS:  100,
   PROMPT_RUNNER_UP_BONUS: 30,
-  PROMPT_BUY_COST:      200,
+  PROMPT_REPLY_BONUS:   10,
+  PROMPT_BUY_COST:      50,
   INACTIVITY_SEC:       24 * 60 * 60,
-  // ── P2P letter market ──
-  SELL_BASE_PRICE:       15,        // default suggested listing price hint
-  MARKET_MAX_PRICE:      500,       // maximum allowed listing price
-  PROMPT_POOL:          [ /* 20 Spanish questions */ ],
+
+  // ── P2P market ──
+  SELL_BASE_PRICE:      15,
+  MARKET_MAX_PRICE:     500,
+  MARKET_COMMISSION:    0.20,       // 20% burned; seller receives 80%
+
+  // ── Black market heat ──
+  BM_HEAT_MAX:          100,
+  BM_HEAT_DECAY_PER_MIN: 3,
+  BM_HEAT_CATCH_INCREMENT: 25,
+  BM_HEAT_CHAT_INCREMENT: 10,
+  BM_BASE_CATCH_PROB:   0.05,
+  BM_HEAT_CATCH_SCALE:  0.20,
+  BM_CATCH_FINE:        100,
+  BM_LISTING_EXPIRY_SEC: 24 * 60 * 60,
+  BM_CHECK_INTERVAL_SEC: 60,
+
+  // ── Gambling / lottery ──
+  LOTTERY_START_COST:         50,
+  LOTTERY_DURATION_SEC:       60,
+  GAMBLING_COINS_PER_LETTER:  50,
+  GAMBLING_WIN_LETTERS:       2,
+  GAMBLING_ERRORS:            [ /* 10 Spanish humorous error messages */ ],
+
+  PROMPT_POOL: [ /* 20 Spanish questions */ ],
 };
 ```
 
-To change any price, edit this file and restart the backend. The frontend
+To change any constant, edit this file and restart the backend. The frontend
 picks up the new values on next page load via `GET /api/config`.
 
 ### Runtime
@@ -136,20 +167,24 @@ picks up the new values on next page load via `GET /api/config`.
 - WAL mode + `synchronous = NORMAL` — safe and fast on the 1 GB droplet.
 - DB file lives at `../../data/futelo.db` relative to `database.js`
   (i.e. `futelo/data/futelo.db`). The `data/` directory is created on first run.
+- **Current schema version: 6** (migrations v1–v6 applied automatically on startup).
 
 #### Tables
 
 | Table | Purpose |
 |---|---|
-| `users` | One row per Telegram user. `inventory_json` is a JSON string `{"a":3,"b":1,...}`. |
-| `game_state` | Key/value. Holds `last_sender_id`. |
-| `messages` | Persisted chat log used to hydrate the feed on load. |
+| `users` | One row per Telegram user. `inventory_json` is a JSON string `{"a":3,"b":1,...}`. Special row: `id=0` (`username='sistema'`) for system messages. |
+| `game_state` | Key/value. Holds `last_sender_id` and BM heat state. |
+| `messages` | Persisted chat log used to hydrate the feed on load. `user_id=0` rows are system messages (pill UI). |
 | `letter_locks` | Active Tier-3 penalties per user. `locked_until` is a Unix timestamp. |
 | `prompts` | One row per prompt round. `status`: `active` or `closed`. |
 | `prompt_replies` | Replies to a prompt. Each row has `user_id`, `text`, `vote_count`. |
 | `prompt_votes` | One vote per `(reply_id, voter_id)` pair — enforces one-vote-per-user. |
 | `market_listings` | One row per P2P listing. `status`: `open` / `sold` / `cancelled`. Columns: `seller_id`, `letter`, `price`, `buyer_id`, `listed_at`, `resolved_at`. |
-| `black_market_listings` | Identical schema to `market_listings` but completely separate table. Used by the secret black market accessed via the triple-tap easter egg. |
+| `black_market_listings` | Identical schema to `market_listings` but completely separate table. Used by the secret black market. |
+| `lottery_rounds` | One row per gambling round. `status`: `active` / `closed`. Holds `secret_letter`, `jackpot`, `started_by`, `closes_at`. |
+| `lottery_bets` | Multiple bets per user per round (no uniqueness constraint). Columns: `round_id`, `user_id`, `letter`. |
+| `notifications` | Persistent per-user toast queue. `delivered=0` until the user connects and drains them. Pruned 7 days after delivery. |
 
 #### Prepared Statements
 
@@ -182,6 +217,16 @@ Black market prepared statements (mirror set, separate table):
 | `resolveBmListing` | Resolves a BM listing (sold / cancelled). |
 | `getUserBmListings` | Returns a user's 20 most recent BM listings. |
 
+Notification statements (in `stmts`):
+
+| Statement | What it does |
+|---|---|
+| `insertNotification` | Insert a pending notification for a user. |
+| `getPendingNotifications` | All undelivered notifications for a user, oldest first. |
+| `markNotificationDelivered` | Mark one notification as delivered by id. |
+| `markAllNotificationsDelivered` | Mark all pending notifications for a user as delivered. |
+| `pruneOldNotifications` | Delete delivered notifications older than a given Unix timestamp. |
+
 ### Game Engine (`backend/src/engine/processMessage.js`)
 
 The **only** place that mutates game state. Rules:
@@ -210,28 +255,28 @@ game-breaking bug.
 Exported:
 - `processMessage(userId, text)` — throws a user-facing `Error` on validation
   failure; returns a rich result object on success.
-- `shopRoll(userId)` — costs `ROLL_COST` coins, unlocks `ROLL_COUNT` random
-  letters. Both values come from `config.js`.
+- `shopRoll(userId)` — weighted-random lootbox roll. Costs `ROLL_COST` coins (scaled
+  by total inventory levels). Picks a tier from `LOOTBOX_TIERS` using `rollRarity()`.
+  Returns `{ newLetters, rarity, newCoins, newInventory, rollCost }`.
 - `letterRequirements(text)` — pure helper, returns `{a:1, p:2, _numbers:1, _symbols:2, ...}`.
   Digits (0-9) are summed into `_numbers`; characters in `SYMBOL_CHARS` are summed into `_symbols`.
 
 ### P2P Market Engine (`backend/src/engine/market.js`)
 
 Manages both the regular player-to-player market and the secret **black market**.
-Coins flow directly from buyer to seller — no coins are created from thin air.
 All constants come from `config.js`.
 
-**Factory pattern**: `makeMarket(s)` produces all five functions bound to a specific
-set of prepared statements. The two instances are:
-- `regularMarket` — backed by `market_listings` stmts
-- `blackMarket` — backed by `black_market_listings` stmts
+**Factory pattern**: `makeMarket(stmts, commission)` produces all five functions bound
+to a specific set of prepared statements and a commission rate. The two instances are:
+- `regularMarket` — 20% commission (`MARKET_COMMISSION`), backed by `market_listings`
+- `blackMarket` — 0% commission, backed by `black_market_listings`
 
 Exported functions:
 
 | Function | Market | Description |
 |---|---|---|
 | `listLetter(sellerId, letter, price)` | regular | Escrows one letter level, creates an `open` listing. |
-| `buyListing(buyerId, listingId)` | regular | Transfers coins buyer→seller, grants letter. |
+| `buyListing(buyerId, listingId)` | regular | Deducts price from buyer; credits `floor(price*(1−commission))` to seller; grants letter. |
 | `cancelListing(sellerId, listingId)` | regular | Returns escrowed letter, cancels listing. |
 | `getOpenListings()` | regular | All open listings with seller names. |
 | `getUserListings(userId)` | regular | User's 20 most recent listings (any status). |
@@ -244,6 +289,40 @@ Exported functions:
 All buy/list/cancel functions throw a user-facing `Error` on validation failure.
 All write operations are wrapped in `db.transaction()` for atomicity.
 
+### Black Market Engine (`backend/src/engine/blackMarket.js`)
+
+Manages the heat/catch mechanic for the secret black market.
+
+- `getCurrentHeat()` — live heat value (decays passively over time based on elapsed minutes).
+- `addHeat(delta)` — increases heat, clamped to `[0, BM_HEAT_MAX]`.
+- `catchProbability(heat)` — `BM_BASE_CATCH_PROB + (heat / BM_HEAT_MAX) × BM_HEAT_CATCH_SCALE`.
+- `runCatchCheck()` — called by the server interval every `BM_CHECK_INTERVAL_SEC`. Expires
+  stale listings and runs a catch roll per open listing. Returns
+  `{ caught: [{sellerId, listingId, fine, letter}], expired: [...], newHeat }`.
+
+Heat sources: catch events (`+BM_HEAT_CATCH_INCREMENT`), chat mention of
+"mercado negro" (`+BM_HEAT_CHAT_INCREMENT`).
+
+### Lottery Engine (`backend/src/engine/lottery.js`)
+
+Manages the letter-gambling mini-game rounds.
+
+- `startLottery(userId)` — deducts `LOTTERY_START_COST` coins, picks a secret letter,
+  creates a `lottery_rounds` row with `closes_at = now + LOTTERY_DURATION_SEC`, returns the round.
+- `placeBet(userId, roundId, letter)`:
+  - Validates round is active and user has `inventory[letter] >= 1`.
+  - Counts existing bets `k` from this user in this round.
+  - For k > 0: error probability `1 − 0.5^k` — random message from `GAMBLING_ERRORS`
+    (bet is still placed).
+  - Deducts 1 level from inventory, inserts to `lottery_bets`.
+- `closeLottery(roundId)`:
+  - Finds winning bets (letter matches secret).
+  - Each winner gets: `inventory[secretLetter] += GAMBLING_WIN_LETTERS` (capped at `MAX_LETTER_LEVEL`)
+    + `coinsEarned = jackpot + otherBetCount × GAMBLING_COINS_PER_LETTER`.
+  - No winners: bet letters convert to coins → carry-over `jackpot`.
+  - Returns `{ roundId, secretLetter, jackpot, winners, carryOver }`.
+- `getActiveLotteryRound()` — returns current active round or `null`.
+
 ### Prompt Engine (`backend/src/engine/promptEngine.js`)
 
 Manages the community prompt lifecycle. All durations and coin rewards come
@@ -253,7 +332,7 @@ Exported:
 - `startPrompt(text)` — opens a new prompt (throws if one is already active).
 - `getActivePrompt()` — returns the current active prompt row or `null`.
 - `getPromptWithReplies(promptId)` — returns prompt + all replies with vote counts.
-- `submitReply(promptId, userId, text)` — adds a reply row.
+- `submitReply(promptId, userId, text)` — adds a reply row, grants `PROMPT_REPLY_BONUS` coins to author.
 - `castVote(replyId, voterId)` — records a vote (one per user per prompt).
 - `closePrompt(promptId)` — marks prompt closed, distributes coin rewards
   (`PROMPT_WINNER_BONUS`, `PROMPT_RUNNER_UP_BONUS`), returns winner info.
@@ -285,24 +364,27 @@ All endpoints are defined in `server.js`.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/api/config` | none | Public game constants (prices, rewards, durations) |
+| GET | `/api/config` | none | Public game constants + live BM heat/catchProb |
 | POST | `/api/auth` | initData header | Upsert user, return profile |
 | GET | `/api/me` | initData header | Current user profile + locks |
 | GET | `/api/messages?limit=N` | none | Last N messages (default 50, max 200) |
 | POST | `/api/message` | initData header | Send a message via the engine |
-| POST | `/api/shop/roll` | initData header | Buy a letter roll |
+| POST | `/api/shop/roll` | initData header | Open a lootbox — returns `{ newLetters, rarity, newCoins, newInventory, rollCost }` |
 | POST | `/api/shop/prompt` | initData header | Buy and fire a community prompt |
-| GET | `/api/prompt/active` | none | Active prompt + replies (or 404) |
+| GET | `/api/prompt/active` | none | Active prompt + replies (or `{ prompt: null }`) |
 | GET | `/api/market/listings` | none | All open P2P listings (with seller names) |
 | GET | `/api/market/my-listings` | initData header | Caller's 20 most recent listings (any status) |
 | POST | `/api/market/list` | initData header | Create a listing (body: `{ letter, price }`) |
-| POST | `/api/market/buy/:id` | initData header | Buy a listing — coins transfer buyer → seller |
+| POST | `/api/market/buy/:id` | initData header | Buy a listing — buyer pays full price, seller receives 80% |
 | POST | `/api/market/cancel/:id` | initData header | Cancel own open listing, recover escrowed letter |
 | GET | `/api/bm/listings` | none | Open **black market** listings (with seller names) |
 | GET | `/api/bm/my-listings` | initData header | Caller's 20 most recent BM listings |
 | POST | `/api/bm/list` | initData header | Create a BM listing (body: `{ letter, price }`) |
-| POST | `/api/bm/buy/:id` | initData header | Buy a BM listing — coins transfer buyer → seller |
+| POST | `/api/bm/buy/:id` | initData header | Buy a BM listing — no commission |
 | POST | `/api/bm/cancel/:id` | initData header | Cancel own open BM listing, recover letter |
+| POST | `/api/lottery/start` | initData header | Start a lottery round (costs `LOTTERY_START_COST` coins) |
+| POST | `/api/lottery/bet` | initData header | Place a bet `{ roundId, letter }` |
+| GET | `/api/lottery/active` | none | Active round + bets (or `{ round: null }`) |
 
 Auth is sent as the `x-init-data` HTTP header **or** `body.initData`.
 
@@ -310,6 +392,7 @@ Auth is sent as the `x-init-data` HTTP header **or** `body.initData`.
 
 - Clients authenticate on `connect` via `socket.handshake.auth.initData`.
 - Each user joins a personal room `user:USER_ID` for targeted events.
+- On connect: pending notifications are drained and emitted immediately.
 
 **Client → Server:**
 
@@ -318,30 +401,39 @@ Auth is sent as the `x-init-data` HTTP header **or** `body.initData`.
 | `send_message` | `{ text }` | Engine validates → `new_message` broadcast |
 | `submit_prompt_reply` | `{ promptId, text }` | Adds a reply → `new_prompt_reply` broadcast |
 | `vote_reply` | `{ replyId }` | Records vote → `vote_update` broadcast |
+| `beg` | — | Broadcasts `new_beg` to all if user is broke |
 
 **Server → Client (broadcast to all):**
 
 | Event | Payload |
 |---|---|
-| `new_message` | Full message object |
+| `new_message` | Full message object (incl. system messages with `userId=0`) |
 | `new_prompt` | Prompt object (new round started) |
 | `new_prompt_reply` | Reply object added to active prompt |
 | `vote_update` | `{ replyId, voteCount }` |
 | `prompt_closed` | `{ promptId, winner, runnerUp }` |
-| `new_market_listing` | `{ listingId, letter, price, sellerName }` — new open listing appeared |
-| `market_listing_sold` | `{ listingId, letter, price }` — listing purchased |
-| `market_listing_cancelled` | `{ listingId }` — listing removed by seller |
-| `bm_new_listing` | `{ listingId, letter, price, sellerName }` — new open **black market** listing |
-| `bm_listing_sold` | `{ listingId, letter, price }` — BM listing purchased |
-| `bm_listing_cancelled` | `{ listingId }` — BM listing removed by seller |
+| `new_market_listing` | `{ listingId, letter, price, sellerName }` |
+| `market_listing_sold` | `{ listingId }` |
+| `market_listing_cancelled` | `{ listingId }` |
+| `bm_new_listing` | `{ listingId, letter, price, sellerName }` |
+| `bm_listing_sold` | `{ listingId }` |
+| `bm_listing_cancelled` | `{ listingId }` |
+| `bm_heat_update` | `{ heat, catchProb }` |
+| `new_lottery` | Round object (new lottery round started) |
+| `lottery_bet_placed` | `{ roundId, userId, username, firstName, letter }` |
+| `lottery_closed` | `{ roundId, secretLetter, jackpot, winners, carryOver }` |
+| `new_beg` | `{ userId, username, firstName }` |
 
-**Server → Client (sender only):**
+**Server → Client (targeted to `user:USER_ID`):**
 
 | Event | Payload |
 |---|---|
 | `user_update` | `{ newCoins, newInventory, newLetters, lockedLetter, tier, coinDelta }` |
 | `rejected_message` | `{ reason }` |
 | `prompt_error` | `{ reason }` |
+| `bm_caught` | `{ letter, fine, listingId }` |
+| `bm_listing_expired` | `{ letter, listingId }` |
+| `notification` | `{ text, type }` — persistent queued toast (sold listings, etc.) |
 
 ---
 
@@ -375,8 +467,9 @@ App.jsx
  ├── ChatFeed                     ← reads socket for new_message events
  ├── PromptBanner                 ← prompt, promptReplies, replyMode, handleVote
  ├── RestrictedKeyboard           ← reads inventory + lockedLetters from user
- ├── ShopModal                    ← calls /api/shop/roll or /api/shop/prompt
- └── BlackMarketModal             ← secret P2P market (triple-tap Header shop button)
+ ├── ShopModal                    ← lootbox roll + P2P market + prompt
+ ├── BlackMarketModal             ← secret P2P market (triple-tap)
+ └── LotteryModal                 ← gambling round (auto-opens on new_lottery)
 ```
 
 **Triple-tap secret (black market):** `handleShopClick` in `App.jsx` uses
@@ -384,16 +477,41 @@ App.jsx
 `ShopModal` and starts a 1500 ms reset timer. If a 3rd click arrives within
 that window, `ShopModal` is closed and `BlackMarketModal` opens instead.
 
-Socket events App.jsx handles for prompts:
+Socket events App.jsx handles:
+- `user_update` → `updateUser(patch)`.
+- `notification` → `showToast(text, type, { duration: 5000 })` — fires for both online (immediate) and offline (drained on reconnect) notifications.
 - `new_prompt` → sets `prompt` state, clears replies.
 - `new_prompt_reply` → appends to `promptReplies`.
 - `vote_update` → updates `voteCount` on matching reply.
 - `prompt_closed` → clears `prompt`, shows winner toast.
 - `prompt_error` → shows error in PromptBanner.
+- `new_lottery` / `lottery_bet_placed` / `lottery_closed`.
+- `new_beg` → toast with name.
 
 `updateUser(patch)` (from `useAuth`) is the single function for applying
 server-pushed state changes. Call it whenever a socket `user_update` event
 or a shop AJAX response arrives.
+
+### System Messages in ChatFeed
+
+`MessageBubble.jsx` checks `message.userId === 0`. If true, renders a centered
+rounded-pill in `text-tg-hint` colour instead of a normal bubble. System messages
+are persisted in the `messages` table and appear on hydration for all users,
+including those who were offline when the event occurred.
+
+### Lootbox UI (`ShopModal` — Roll Tab)
+
+`RARITY_META` object at module level defines per-tier visual treatment. Key fields:
+- `bgClass`, `textClass`, `chipClass` — full Tailwind class strings (no interpolation).
+- `animated` — enables `animate-bounce` on letter chips (staggered `animationDelay`).
+- `pulse` — enables `animate-pulse` on the result card backdrop (`épico`, `legendario`).
+- `legendary` — shows extra sparkle row below the letters.
+- `celebrationEmoji` — emoji row shown above the rarity label.
+
+Haptic feedback on roll result: `legendario` → `notificationOccurred('success')`;
+`épico` → `impactOccurred('heavy')`; `raro` → `impactOccurred('medium')`.
+
+`rollResult` state is `{ letters: string[], rarity: string }` — **not a bare array**.
 
 ### RestrictedKeyboard Key Logic
 
@@ -523,10 +641,15 @@ To simulate two players:
 - **New DB write?** Add it inside the `processMessage` transaction or in a
   dedicated transaction-wrapped helper. Add the prepared statement to `stmts`
   in `database.js`.
+- **New DB table?** Add a migration to the `migrations` array in `database.js` and bump `SCHEMA_VERSION`.
 - **New REST endpoint?** Add to `server.js`, guard with `authMiddleware`.
 - **New Socket.io event?** Define in the `io.on('connection')` block; emit
   `user_update` or a new named event back to `socket` (not `io`) for
   per-user data, `io.emit` for broadcast.
+- **Per-user alert (online or offline)?** Use `notifyUser(userId, text, type)` — never emit
+  directly without persisting to `notifications`. Offline users will miss un-persisted events.
+- **System chat message?** Use `broadcastSystemMessage(text)` — persists to DB as `userId=0`
+  and emits to all active clients. Becomes visible to late joiners on feed hydration.
 - **New UI state?** Thread it through `App.jsx` → `useAuth`'s `updateUser()`.
   Do not create separate fetch calls inside child components that could
   race with socket events.
@@ -540,13 +663,14 @@ To simulate two players:
 
 - Config: `backend/jest.config.js` (`testEnvironment: 'node'`, `maxWorkers: 1`)
 - Run: `cd backend && npm test`
-- **101 tests across 4 suites** (all passing)
+- **118 tests across 5 suites** (all passing)
 
 | File | Tests | What it covers |
 |---|---|---|
 | `src/__tests__/auth.test.js` | 12 | `validateInitData` HMAC, `validateInitDataDev` dev tokens |
-| `src/__tests__/engine.test.js` | 29 | `letterRequirements` (incl. `_numbers`/`_symbols`), all 3 tiers, coin floor, letter level cap, `shopRoll`, ñ support, transaction shape |
+| `src/__tests__/engine.test.js` | 29 | `letterRequirements` (incl. `_numbers`/`_symbols`), all 3 tiers, coin floor, letter level cap, `shopRoll` (lootbox rarity), ñ support, transaction shape |
 | `src/__tests__/market.test.js` | 23 | `listLetter`, `buyListing`, `cancelListing`, `getOpenListings`, `getUserListings`, coin/letter cap invariants; BM factory isolation (`bmListLetter`, `bmCancelListing`, `getBmOpenListings`, `getBmUserListings`) |
+| `src/__tests__/blackMarket.test.js` | 17 | Heat decay, `addHeat`, `catchProbability`, `runCatchCheck`, listing expiry |
 | `src/__tests__/api.test.js` | 37 | All REST endpoints incl. P2P market + full BM endpoint flow, end-to-end with temp SQLite DB |
 
 **Key patterns:**
@@ -586,4 +710,8 @@ To simulate two players:
 | Keyboard row layout | Space and Enter live on **row 3** (their own row). Do not move them onto the letter rows. The `ROWS` constant in `RestrictedKeyboard.jsx` is the single source of truth. |
 | `ShopModal` shows wrong prices | It fetches `/api/config` on mount. If the fetch fails it falls back to the hardcoded defaults in `useState`. Always restart the backend after editing `config.js`. |
 | Prompt won't start | Only one prompt can be active at a time. Call `getActivePrompt()` first; if it returns non-null, the previous round must close before a new one starts. |
+| Lottery won't start | Only one round can be active at a time. Same pattern — check `getActiveLotteryRound()` first. |
 | Engine error strings changed | Test regexes in `engine.test.js` and `api.test.js` must match the Spanish wording — e.g. `/vac/i` for empty, `/insuficiente/i` for not-enough, `/bloqueada/i` for locked. |
+| Seller misses sale toast when offline | Use `notifyUser()` — not a direct socket emit — so the notification persists until delivered. |
+| System messages missing from feed | Requires `id=0` user row (migration v5). Restart the server to re-run migrations on a fresh DB. |
+| `rollResult` shape changed | `rollResult` in `ShopModal` is `{ letters: string[], rarity: string }` — not a bare `string[]`. Access letters via `rollResult.letters`. |
