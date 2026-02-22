@@ -349,13 +349,6 @@ export default function App() {
     updateUser({ newCoins: data.newCoins });
   }, [updateUser]);
 
-  const handleBetPlaced = useCallback((bet, jackpot) => {
-    setLotteryRound((prev) => {
-      if (!prev) return prev;
-      const bets = prev.bets || [];
-      return { ...prev, jackpot, bets: [...bets, bet] };
-    });
-  }, []);
   // ── Dev mode: show user picker when there is no session yet ──────────────
   if (!initData) {
     return <DevUserPicker onSelect={setInitData} />;
@@ -505,7 +498,6 @@ export default function App() {
         lotteryRound={lotteryRound}
         carryOver={lotteryCarryOver}
         onLotteryStarted={handleLotteryStarted}
-        onBetPlaced={handleBetPlaced}
         onError={(msg) => showToast(msg, 'warn', { duration: 4000 })}
         cfg={lotteryCfg}
       />
