@@ -84,8 +84,8 @@ export default function PromptBanner({
             <p className="text-[11px] text-red-500 bg-red-50 rounded px-2 py-1">{promptError}</p>
           )}
 
-          {/* Reply mode toggle */}
-          {!isExpired && (
+          {/* Reply mode toggle – hidden once the user has already replied */}
+          {!isExpired && !hasReplied && (
             <div className="flex gap-2">
               <button
                 onPointerDown={replyMode ? onToggleReply : undefined}
@@ -105,9 +105,12 @@ export default function PromptBanner({
                     : 'bg-tg-bg-sec text-tg-hint'
                 }`}
               >
-                {hasReplied ? '✏️ Editar respuesta' : '✍️ Responder al prompt'}
+                ✍️ Responder al prompt
               </button>
             </div>
+          )}
+          {!isExpired && hasReplied && (
+            <p className="text-[11px] text-tg-hint text-center py-0.5">✓ Ya respondiste (+10 🪙)</p>
           )}
 
           {/* Replies list */}
