@@ -83,41 +83,74 @@ Requires:
 | 2 | Propio mensaje, racha = 2 | **0** | Aviso de spam |
 | 3 | Propio mensaje, racha ≥ 3 | **−50** | 1 letra del inventario **bloqueada 5 min** |
 
-**Las letras son niveles de desbloqueo** (no se consumen). `inventory["a"] = 3` significa que puedes usar hasta 3 `a`s por mensaje. Los tiers **nunca** otorgan letras — las letras solo se obtienen con el bono de primer mensaje (26 aleatorias) o comprando tiradas en la Tienda.
+**Las letras son niveles de desbloqueo** (no se consumen). `inventory["a"] = 3` significa que puedes usar hasta 3 `a`s por mensaje. Los tiers **nunca** otorgan letras — las letras solo se obtienen con el bono de primer mensaje (26 aleatorias) o comprando cajas en la Tienda.
 
-### Shop
+### Shop (Tienda)
 
 | Item | Coste | Efecto |
 |------|-------|--------|
-| Tirada de letras | 50 🪙 | Desbloquea 3 letras aleatorias (+1 nivel cada una) |
-| Lanzar un prompt | 200 🪙 | Inicia un prompt comunitario inmediatamente |
-| Vender letra (mercado normal) | — | Recibe monedas instantáneamente, sin riesgo |
-| Vender letra (mercado negro) | — | Recibe más monedas sin comisión, pero con riesgo de multa |
+| Abrir caja | 50 🪙 base + 2 🪙 × niveles totales | Obtén letras según rareza del resultado |
+| Lanzar un prompt | configurable 🪙 | Inicia un prompt comunitario inmediatamente |
+| Vender letra (mercado normal) | — | Lista la letra; comprador paga; 20% comisión |
+| Vender letra (mercado negro) | — | Sin comisión, pero con riesgo de multa |
+
+#### Cajas — Rareza del resultado
+
+| Rareza | Letras ganadas | Probabilidad |
+|--------|---------------|--------------|
+| 📦 Común | 1 | ~40% |
+| ✨ Bueno | 3 | ~35% |
+| ⭐ Raro | 5 | ~18% |
+| 💫 Épico | 8 | ~6% |
+| 🏆 Legendario | 12 | ~1% |
+
+Las raridades más altas muestran animaciones, efectos y haptics en la UI de Telegram.
 
 ### Letter Market
 
-**Mercado normal** — instant, no risk: earn a fixed amount immediately.
+**Mercado normal** — 20% comisión quemada en cada venta. El vendedor recibe el 80% del precio. Las notificaciones de venta se persisten en la DB, así que los vendedores offline las ven al reconectarse.
 
-**Mercado negro** — deferred, risky:
-- The letter level is escrowed and listed.
-- No commission — but selling here is not without consequences.
-- Something watches. Get caught and you'll be fined. Talk about it and things get worse.
-- Listings don't last forever.
+**Mercado negro** — sin comisión, con riesgo:
+- El nivel de letra queda en escrow mientras está listado.
+- Algo vigila. Si te atrapan, recibes una multa. Hablar de ello empeora las cosas.
+- Los listados no duran para siempre.
+- Acceso: triple-toca el botón de la tienda en menos de 1.5 s.
 
 ### Community Prompts
 
-A timed Q&A round that runs inside the chat.
+Una ronda de preguntas y respuestas con temporizador.
 
-- Triggered automatically after a long period of inactivity, or bought from the shop.
-- Any player can reply. Others vote with ❤️.
-- When the timer expires, coins are distributed to the top-voted replies.
-- Only one prompt runs at a time.
+- Se activa automáticamente tras un período de inactividad, o se compra en la tienda.
+- Cualquier jugador puede responder; los demás votan con ❤️.
+- Al expirar el tiempo, las monedas se distribuyen a las respuestas más votadas.
+- Solo un prompt activo a la vez.
+- Al cerrarse, se publica un **mensaje del sistema** en el feed indicando el ganador.
+
+### Letter Gambling (Lotería)
+
+Un mini-juego de apuestas periódico:
+
+- Alguien inicia la ronda gastando monedas.
+- Los jugadores apuestan letras de su inventario como predicción de la letra secreta.
+- La 2ª apuesta en adelante tiene una probabilidad de error escalante (1 − 0.5^k).
+- Al cerrarse la ronda se revela la letra secreta.
+- Los acertantes reciben +2 niveles de la letra ganada más monedas del bote.
+- Si nadie acierta, las letras se convierten en monedas y el bote se acumula.
+- Al cerrarse, se publica un **mensaje del sistema** en el feed con el resultado.
+
+### System Messages
+
+Después de cerrar prompts y rondas de lotería, el servidor publica un mensaje de sistema (`userId = 0`) visible para todos, incluidos los jugadores que estaban offline (los mensajes se persisten en la DB y se muestran en el feed como pills centradas).
+
+### Notifications
+
+Las alertas por usuario (p.ej. "tu letra se vendió") se **persisten en la DB**. Si estás offline cuando tu listado se vende, el toast queda en cola y se muestra la próxima vez que te conectes.
 
 ---
 
 ## Tests
 
 ```bash
-cd backend && npm test   # Jest + supertest
-cd frontend && npm test  # Vitest + Testing Library
+cd backend && npm test   # Jest + supertest  (118 tests, 5 suites)
+cd frontend && npm test  # Vitest + Testing Library  (35 tests, 2 suites)
 ```
