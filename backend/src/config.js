@@ -68,6 +68,26 @@ module.exports = {
   /** Fraction of the sale price burned on the regular market (0.20 = 20% commission). Black market = 0. */
   MARKET_COMMISSION: 0.20,
 
+  // ── Black market heat system ────────────────────────────────────────────────
+  /** Maximum heat value (0–100 scale). */
+  BM_HEAT_MAX: 100,
+  /** Heat points lost per real minute (passive decay toward 0). */
+  BM_HEAT_DECAY_PER_MIN: 3,
+  /** Heat gained when a seller is caught in the black market. */
+  BM_HEAT_CATCH_INCREMENT: 25,
+  /** Heat gained when someone mentions "mercado negro" in chat. */
+  BM_HEAT_CHAT_INCREMENT: 10,
+  /** Minimum catch probability per check cycle (at heat = 0). */
+  BM_BASE_CATCH_PROB: 0.05,
+  /** Extra catch probability added at maximum heat (heat = 100). */
+  BM_HEAT_CATCH_SCALE: 0.25,
+  /** Coins fined from a seller when they are caught. */
+  BM_CATCH_FINE: 50,
+  /** How often (seconds) the server rolls the catch check. */
+  BM_CHECK_INTERVAL_SEC: 2 * 60,
+  /** An open BM listing auto-expires after this many seconds (letter returned, no coins). */
+  BM_LISTING_EXPIRY_SEC: 60 * 60,
+
   // ── Beg system ─────────────────────────────────────────────────────────────
   /** Coins transferred when a player gives to a beggar. */
   BEG_GIFT_AMOUNT: 10,

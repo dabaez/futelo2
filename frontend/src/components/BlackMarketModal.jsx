@@ -36,10 +36,21 @@ export default function BlackMarketModal({
   const [activeTab, setActiveTab] = useState('buy');
   const [maxPrice,  setMaxPrice]  = useState(500);
 
+  // ── Heat state ────────────────────────────────────────────────────────
+  const [heat,        setHeat]        = useState(0);
+  const [catchProb,   setCatchProb]   = useState(0.05);
+  const [catchFine,   setCatchFine]   = useState(50);
+  const [expiryHours, setExpiryHours] = useState(1);
+  const [caughtAlert, setCaughtAlert] = useState(null); // { letter, fine }
+
   // ── Fetch config once ─────────────────────────────────────────────────
   useEffect(() => {
     fetch('/api/config').then(safeJson).then((d) => {
-      if (d?.MARKET_MAX_PRICE) setMaxPrice(d.MARKET_MAX_PRICE);
+      if (d?.MARKET_MAX_PRICE)       setMaxPrice(d.MARKET_MAX_PRICE);
+      if (d?.bmHeat        != null)  setHeat(d.bmHeat);
+      if (d?.bmCatchProb   != null)  setCatchProb(d.bmCatchProb);
+      if (d?.BM_CATCH_FINE != null)  setCatchFine(d.BM_CATCH_FINE);
+      if (d?.BM_LISTING_EXPIRY_SEC)  setExpiryHours(Math.round(d.BM_LISTING_EXPIRY_SEC / 3600));
     }).catch(() => {});
   }, []);
 
@@ -94,13 +105,32 @@ export default function BlackMarketModal({
       setOpenListings((p) => p.filter((l) => l.id !== listingId));
       setMyListings((p) => p.map((l) => l.id === listingId ? { ...l, status: 'cancelled' } : l));
     };
-    socket.on('bm_new_listing',      onNew);
-    socket.on('bm_listing_sold',      onSold);
-    socket.on('bm_listing_cancelled', onCancelled);
+    const onHeatUpdate = ({ heat: h, catchProb: cp }) => {
+      setHeat(h);
+      setCatchProb(cp);
+    };
+    const onCaught = ({ letter, fine, listingId }) => {
+      setCaughtAlert({ letter: LETTER_LABEL(letter), fine });
+      // Override the 'cancelled' status set by onCancelled with the correct 'caught'
+      setMyListings((p) => p.map((l) => l.id === listingId ? { ...l, status: 'caught' } : l));
+      setTimeout(() => setCaughtAlert(null), 6000);
+    };
+    const onExpired = ({ letter, listingId }) => {
+      setMyListings((p) => p.map((l) => l.id === listingId ? { ...l, status: 'expired' } : l));
+    };
+    socket.on('bm_new_listing',       onNew);
+    socket.on('bm_listing_sold',       onSold);
+    socket.on('bm_listing_cancelled',  onCancelled);
+    socket.on('bm_heat_update',        onHeatUpdate);
+    socket.on('bm_caught',             onCaught);
+    socket.on('bm_listing_expired',    onExpired);
     return () => {
-      socket.off('bm_new_listing',      onNew);
-      socket.off('bm_listing_sold',      onSold);
-      socket.off('bm_listing_cancelled', onCancelled);
+      socket.off('bm_new_listing',       onNew);
+      socket.off('bm_listing_sold',       onSold);
+      socket.off('bm_listing_cancelled',  onCancelled);
+      socket.off('bm_heat_update',        onHeatUpdate);
+      socket.off('bm_caught',             onCaught);
+      socket.off('bm_listing_expired',    onExpired);
     };
   }, [socket]);
 
@@ -239,10 +269,36 @@ export default function BlackMarketModal({
           ))}
         </div>
 
+        {/* Heat level indicator */}
+        <div className="px-4 py-2 border-b border-zinc-800 shrink-0">
+          <div className="flex items-center justify-between text-xs text-zinc-500 mb-1.5">
+            <span>🌡️ Calor del mercado</span>
+            <span className="tabular-nums">
+              {(catchProb * 100).toFixed(0)}% riesgo por chequeo
+              {' · '}multa {catchFine} 🪙
+              {' · '}expira en {expiryHours}h
+            </span>
+          </div>
+          <div className="w-full h-1.5 bg-zinc-700 rounded-full overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all duration-700"
+              style={{
+                width: `${Math.min(100, heat)}%`,
+                backgroundColor: heat < 33 ? '#22c55e' : heat < 66 ? '#eab308' : '#ef4444',
+              }}
+            />
+          </div>
+        </div>
+
         {/* Tab content */}
         <div className="overflow-y-auto flex-1 p-4 flex flex-col gap-3">
 
-          {/* ── 🛒 Buy tab ─────────────────────────────────────────────── */}
+          {/* Caught alert */}
+          {caughtAlert && (
+            <div className="bg-red-900/70 border border-red-700 rounded-xl px-4 py-3 text-sm text-red-300 animate-pulse">
+              ⚠️ ¡Te atraparon vendiendo <strong>{caughtAlert.letter}</strong>! Multado {caughtAlert.fine} 🪙
+            </div>
+          )}
           {activeTab === 'buy' && (
             <>
               <p className="text-xs text-zinc-500 text-center">

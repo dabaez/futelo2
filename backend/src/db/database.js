@@ -287,6 +287,10 @@ const stmts = {
   getUserBmListings: db.prepare(
     "SELECT * FROM black_market_listings WHERE seller_id = ? ORDER BY listed_at DESC LIMIT 20"
   ),
+  // Full rows (no JOIN) used by the heat engine's catch check loop
+  getAllOpenBmListings: db.prepare(
+    "SELECT * FROM black_market_listings WHERE status = 'open' ORDER BY listed_at ASC"
+  ),
 
   // ── Lottery ───────────────────────────────────────────────────────────────
   insertLotteryRound:   db.prepare(

@@ -51,6 +51,9 @@ const {
   getActiveLottery, getLotteryWithBets, getCarryOver,
   LOTTERY_START_COST, LOTTERY_BET_AMOUNT,
 }                                        = require('./engine/lottery');
+const {
+  getCurrentHeat, addHeat, catchProbability, runCatchCheck,
+}                                        = require('./engine/blackMarketHeat');
 const config                             = require('./config');
 
 const BEG_GIFT_AMOUNT  = config.BEG_GIFT_AMOUNT;
@@ -163,6 +166,14 @@ app.get('/api/config', (_req, res) => {
     LOTTERY_START_COST:     config.LOTTERY_START_COST,
     LOTTERY_BET_AMOUNT:     config.LOTTERY_BET_AMOUNT,
     LOTTERY_DURATION_SEC:   config.LOTTERY_DURATION_SEC,
+    // ── Black market heat (live values) ──
+    BM_HEAT_MAX:            config.BM_HEAT_MAX,
+    BM_BASE_CATCH_PROB:     config.BM_BASE_CATCH_PROB,
+    BM_HEAT_CATCH_SCALE:    config.BM_HEAT_CATCH_SCALE,
+    BM_CATCH_FINE:          config.BM_CATCH_FINE,
+    BM_LISTING_EXPIRY_SEC:  config.BM_LISTING_EXPIRY_SEC,
+    bmHeat:      getCurrentHeat(),
+    bmCatchProb: catchProbability(getCurrentHeat()),
   });
 });
 
@@ -522,6 +533,12 @@ io.on('connection', (socket) => {
         coinDelta:  result.coinDelta,
         tier:       result.tier,
       }).catch(() => {});
+
+      // Heat increase when someone mentions the black market
+      if (text.toLowerCase().includes('mercado negro')) {
+        const newHeat = addHeat(config.BM_HEAT_CHAT_INCREMENT);
+        io.emit('bm_heat_update', { heat: newHeat, catchProb: catchProbability(newHeat) });
+      }
     } catch (err) {
       socket.emit('rejected_message', { reason: err.message });
     }
@@ -640,11 +657,52 @@ if (bot) {
 //  2. Auto-fire a new prompt only when the chat has been silent for 24 h.
 //  Manual firing is available via POST /api/shop/prompt (costs 200 coins).
 const INACTIVITY_SEC = config.INACTIVITY_SEC;
+const BM_CHECK_INTERVAL_SEC = config.BM_CHECK_INTERVAL_SEC;
 
 if (require.main === module) {
+  let lastBmCheckSec = 0; // triggers immediately on first tick
+
   setInterval(() => {
     const nowSec = Math.floor(Date.now() / 1000);
     const active = getActivePrompt();
+
+    // ── Black market catch / expiry check ─────────────────────────────────
+    if (nowSec - lastBmCheckSec >= BM_CHECK_INTERVAL_SEC) {
+      lastBmCheckSec = nowSec;
+      const { caught, expired, heat: newHeat } = runCatchCheck();
+
+      for (const c of caught) {
+        // Tell the seller they were caught
+        io.to(`user:${c.sellerId}`).emit('bm_caught', {
+          letter: c.letter, fine: c.fine, listingId: c.listingId,
+        });
+        // Push updated balance
+        const freshSeller = requireUser(c.sellerId);
+        io.to(`user:${c.sellerId}`).emit('user_update', {
+          newCoins:  freshSeller.coins,
+          coinDelta: -c.fine,
+        });
+        // Remove from public listings feed
+        io.emit('bm_listing_cancelled', { listingId: c.listingId });
+        console.log(`[BM] User ${c.sellerId} caught selling "${c.letter}". Fine: ${c.fine}. Heat: ${newHeat}`);
+      }
+
+      for (const e of expired) {
+        // Letter returned — tell the seller
+        io.to(`user:${e.sellerId}`).emit('bm_listing_expired', {
+          letter: e.letter, listingId: e.listingId,
+        });
+        const freshSeller = requireUser(e.sellerId);
+        io.to(`user:${e.sellerId}`).emit('user_update', {
+          newInventory: JSON.parse(freshSeller.inventory_json),
+        });
+        io.emit('bm_listing_cancelled', { listingId: e.listingId });
+      }
+
+      if (caught.length > 0 || expired.length > 0) {
+        io.emit('bm_heat_update', { heat: newHeat, catchProb: catchProbability(newHeat) });
+      }
+    }
 
     // Close expired lottery round
     const activeLottery = getActiveLottery();
