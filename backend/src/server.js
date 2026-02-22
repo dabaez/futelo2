@@ -633,6 +633,27 @@ function buildMessagePayload(user, text, result) {
   };
 }
 
+/**
+ * Insert a server-generated system message (user_id=0) and broadcast it
+ * as a new_message event so it appears in the chat feed for everyone,
+ * including players who reconnect after the fact.
+ */
+function broadcastSystemMessage(text) {
+  const result = stmts.insertMessage.run({ userId: 0, text, coinDelta: 0 });
+  const payload = {
+    id:        result.lastInsertRowid,
+    userId:    0,
+    username:  'sistema',
+    firstName: 'Sistema',
+    photoUrl:  '',
+    text,
+    coinDelta: 0,
+    tier:      null,
+    createdAt: Math.floor(Date.now() / 1000),
+  };
+  io.emit('new_message', payload);
+}
+
 // ── Start bot (skipped in dev mode without a real token) ──────────────────
 if (bot) {
   if (BOT_MODE === 'webhook') {
@@ -720,6 +741,18 @@ if (require.main === module) {
           });
         });
         io.emit('lottery_closed', lResult);
+        // Persist a summary in the chat feed
+        if (lResult.carryOver) {
+          broadcastSystemMessage(
+            `🎲 La letra secreta era «${lResult.secretLetter.toUpperCase()}». Nadie acertó. El bote sube a ${lResult.jackpot} 🪙.`
+          );
+        } else {
+          const names = lResult.winners.map((w) => w.firstName || w.username).join(', ');
+          const prize = lResult.winners[0]?.coinsEarned ?? 0;
+          broadcastSystemMessage(
+            `🎲 La letra secreta era «${lResult.secretLetter.toUpperCase()}». ¡${names} acertó! +${prize} 🪙 y +letras.`
+          );
+        }
         console.log(`[Lottery] Closed. Letter: ${lResult.secretLetter}. Winners: ${lResult.winners.map((w) => w.userId).join(', ') || 'none'}`);
       }
     }
@@ -729,6 +762,21 @@ if (require.main === module) {
       const result = closePrompt(active.id);
       if (result) {
         io.emit('prompt_closed', result);
+        // Persist a summary in the chat feed
+        if (result.winners && result.winners.length > 0) {
+          const w = result.winners[0];
+          const name = w.firstName || w.username;
+          const runners = result.runnersUp?.length > 0
+            ? ` Sub: ${result.runnersUp.map((r) => r.firstName || r.username).join(', ')}.`
+            : '';
+          broadcastSystemMessage(
+            `🏆 Prompt cerrado: «${result.promptText}». Ganador: ${name} — «${w.text}» (+${w.bonus} 🪙).${runners}`
+          );
+        } else {
+          broadcastSystemMessage(
+            `🏆 Prompt cerrado: «${result.promptText}». Sin respuestas.`
+          );
+        }
         const winnerNames = result.winners?.map((w) => w.userId).join(', ') || 'none';
         console.log(`[Prompt] Closed "${active.text}". Winners: ${winnerNames}`);
       }

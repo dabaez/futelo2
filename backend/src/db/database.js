@@ -98,7 +98,7 @@ db.exec(`
 // Migrations never need to be run manually — they apply automatically on startup.
 //
 // IMPORTANT: never edit a past migration. Always append a new one.
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 const migrations = [
   // ── v1: P2P letter market ─────────────────────────────────────────────────
@@ -185,6 +185,17 @@ const migrations = [
       ALTER TABLE lottery_bets_new RENAME TO lottery_bets;
       CREATE INDEX IF NOT EXISTS idx_lb_round      ON lottery_bets(round_id);
       CREATE INDEX IF NOT EXISTS idx_lb_user_round ON lottery_bets(round_id, user_id);
+    `);
+  },
+
+  // ── v5: System user for chat feed system messages ─────────────────────
+  // Inserts a virtual user with id=0 used by server-generated messages
+  // (lottery results, prompt summaries). Telegram UIDs start at 1 so 0
+  // will never clash with a real player.
+  () => {
+    db.exec(`
+      INSERT OR IGNORE INTO users (id, username, first_name, photo_url, coins, inventory_json)
+      VALUES (0, 'sistema', 'Sistema', '', 0, '{}');
     `);
   },
 ];

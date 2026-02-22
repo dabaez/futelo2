@@ -208,7 +208,7 @@ export default function App() {
       setLotteryRound((prev) => {
         if (!prev || prev.id !== roundId) return prev;
         const bets = prev.bets || [];
-        return { ...prev, jackpot, bets: [...bets.filter((b) => b.userId !== bet.userId), bet] };
+        return { ...prev, jackpot, bets: [...bets, bet] };
       });
     };
     const onLotteryClosed = (result) => {
@@ -488,6 +488,7 @@ export default function App() {
         carryOver={lotteryCarryOver}
         onLotteryStarted={handleLotteryStarted}
         onBetPlaced={handleBetPlaced}
+        onError={(msg) => showToast(msg, 'warn', { duration: 4000 })}
         cfg={lotteryCfg}
       />
       {/* ── Toast notification ──────────────────────────────────────────── */}

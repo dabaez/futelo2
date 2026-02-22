@@ -40,6 +40,18 @@ function formatTime(unixSec) {
 }
 
 export default function MessageBubble({ message, isOwn }) {
+  // System messages (userId === 0) render as a centred info pill
+  if (message.userId === 0) {
+    return (
+      <div className="flex justify-center px-4 py-1 animate-slide-up">
+        <span className="text-[11px] text-tg-hint bg-tg-bg-sec rounded-full px-3 py-1 text-center max-w-[90%]">
+          {message.text}
+          <span className="ml-1 opacity-50">{formatTime(message.createdAt)}</span>
+        </span>
+      </div>
+    );
+  }
+
   const tier     = TIER_META[message.tier] || TIER_META[1];
   const coinStr  = message.coinDelta > 0
     ? `+${message.coinDelta}`

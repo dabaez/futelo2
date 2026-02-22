@@ -41,6 +41,7 @@ export default function LotteryModal({
   carryOver,     // accumulated jackpot from previous rounds
   onLotteryStarted,
   onBetPlaced,
+  onError,       // (message) => void  — shown as a toast by App.jsx
   cfg,
 }) {
   const [loading, setLoading]         = useState(false);
@@ -101,7 +102,10 @@ export default function LotteryModal({
       if (!r.ok) throw new Error(data?.error || 'Error al apostar.');
       onBetPlaced?.(data.bet, data.jackpot);
       setPick(null);
-    } catch (e) { setError(e.message); }
+    } catch (e) {
+      setError(e.message);
+      onError?.(e.message);
+    }
     finally { setLoading(false); }
   }, [pick, loading, lotteryRound, inventory, initData, onBetPlaced]);
 
@@ -153,13 +157,14 @@ export default function LotteryModal({
           <button onClick={onClose} className="text-tg-hint text-xl leading-none active:opacity-60">✕</button>
         </div>
 
-        <div className="overflow-y-auto flex-1 p-4 flex flex-col gap-4">
+        {/* Error banner — sits outside the scroll area so it's always visible */}
+        {error && (
+          <div className="mx-4 mt-3 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-center shrink-0">
+            <p className="text-xs text-amber-800 font-semibold">⚠️ {error}</p>
+          </div>
+        )}
 
-          {error && (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-center">
-              <p className="text-xs text-amber-800 font-semibold">⚠️ {error}</p>
-            </div>
-          )}
+        <div className="overflow-y-auto flex-1 p-4 flex flex-col gap-4">
 
           {/* ── No active round ─────────────────────────────────────────── */}
           {!lotteryRound && (
