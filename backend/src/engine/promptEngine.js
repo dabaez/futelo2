@@ -19,6 +19,7 @@ const {
   PROMPT_DURATION_SEC,
   PROMPT_WINNER_BONUS,
   PROMPT_RUNNER_UP_BONUS,
+  PROMPT_REPLY_BONUS,
   PROMPT_BUY_COST,
   PROMPT_POOL,
 } = require('../config');
@@ -118,8 +119,11 @@ function submitReply(userId, promptId, text) {
   const result = stmts.insertPromptReply.run(promptId, userId, trimmed);
   if (result.changes === 0) throw new Error('Ya respondiste a este prompt.');
 
+  stmts.updateCoins.run(PROMPT_REPLY_BONUS, userId);
+  const fresh = requireUser(userId);
+
   const reply = stmts.getPromptReplyById.get(result.lastInsertRowid);
-  const user  = requireUser(userId);
+  const user  = fresh;
   return {
     id:        reply.id,
     promptId,
@@ -130,6 +134,8 @@ function submitReply(userId, promptId, text) {
     firstName: user.first_name,
     photoUrl:  user.photo_url,
     createdAt: reply.created_at,
+    replyBonus: PROMPT_REPLY_BONUS,
+    newCoins:   fresh.coins,
   };
 }
 
@@ -168,29 +174,33 @@ function closePrompt(promptId) {
     stmts.closePrompt.run(promptId);
 
     if (replies.length === 0) {
-      return { promptId, promptText: prompt.text, winner: null, runnerUp: null, replies: [] };
+      return { promptId, promptText: prompt.text, winners: [], runnersUp: [], replies: [] };
     }
 
-    const [first, second] = replies;  // sorted votes DESC
-    let winner   = null;
-    let runnerUp = null;
+    // Collect all replies that tie for 1st place (votes > 0)
+    const topVotes = replies[0].votes;
+    const winners  = topVotes > 0 ? replies.filter((r) => r.votes === topVotes) : [];
+    winners.forEach((r) => stmts.updateCoins.run(WINNER_BONUS, r.user_id));
 
-    if (first.votes > 0) {
-      stmts.updateCoins.run(WINNER_BONUS, first.user_id);
-      winner = { ...replyToPayload(first), bonus: WINNER_BONUS };
-    }
-
-    if (second && second.votes > 0 && second.user_id !== first.user_id) {
-      stmts.updateCoins.run(RUNNER_UP_BONUS, second.user_id);
-      runnerUp = { ...replyToPayload(second), bonus: RUNNER_UP_BONUS };
+    // Only award runners-up when there is exactly one winner
+    let runnersUp = [];
+    if (winners.length === 1) {
+      const remaining  = replies.filter((r) => r.votes < topVotes);
+      if (remaining.length > 0) {
+        const secondVotes = remaining[0].votes;
+        if (secondVotes > 0) {
+          runnersUp = remaining.filter((r) => r.votes === secondVotes);
+          runnersUp.forEach((r) => stmts.updateCoins.run(RUNNER_UP_BONUS, r.user_id));
+        }
+      }
     }
 
     return {
       promptId,
       promptText: prompt.text,
-      winner,
-      runnerUp,
-      replies: replies.map(replyToPayload),
+      winners:   winners.map((r)   => ({ ...replyToPayload(r), bonus: WINNER_BONUS })),
+      runnersUp: runnersUp.map((r) => ({ ...replyToPayload(r), bonus: RUNNER_UP_BONUS })),
+      replies:   replies.map(replyToPayload),
     };
   })();
 
