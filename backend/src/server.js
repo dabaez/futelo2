@@ -54,6 +54,7 @@ const {
 const {
   getCurrentHeat, addHeat, catchProbability, runCatchCheck,
 }                                        = require('./engine/blackMarketHeat');
+const { buyPickaxe, swing: mineSwing }   = require('./engine/mining');
 const config                             = require('./config');
 
 const BEG_GIFT_AMOUNT  = config.BEG_GIFT_AMOUNT;
@@ -167,6 +168,10 @@ app.get('/api/config', (_req, res) => {
     LOTTERY_DURATION_SEC:          config.LOTTERY_DURATION_SEC,
     GAMBLING_COINS_PER_LETTER:     config.GAMBLING_COINS_PER_LETTER,
     GAMBLING_WIN_LETTERS:          config.GAMBLING_WIN_LETTERS,
+    // ── Mining ──
+    PICKAXE_COST:                  config.PICKAXE_COST,
+    PICKAXE_HITS:                  config.PICKAXE_HITS,
+    MINE_HIT_CHANCE:               config.MINE_HIT_CHANCE,
     // ── Black market heat (live values) ──
     BM_HEAT_MAX:            config.BM_HEAT_MAX,
     BM_BASE_CATCH_PROB:     config.BM_BASE_CATCH_PROB,
@@ -194,6 +199,7 @@ app.post('/api/auth', authMiddleware, (req, res) => {
       inventory:   JSON.parse(user.inventory_json || '{}'),
       streak:      user.streak_count,
       lockedLetters: locks.map((l) => l.letter),
+      pickaxe_hits: user.pickaxe_hits,
     },
   });
 });
@@ -213,6 +219,7 @@ app.get('/api/me', authMiddleware, (req, res) => {
     inventory:    JSON.parse(user.inventory_json || '{}'),
     streak:       user.streak_count,
     lockedLetters: locks.map((l) => l.letter),
+    pickaxe_hits: user.pickaxe_hits,
   });
 });
 
@@ -501,6 +508,35 @@ app.post('/api/lottery/bet', authMiddleware, (req, res) => {
       newInventory: result.newInventory,
       newLetters:   [],
     });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ── REST: /api/mine ────────────────────────────────────────────────────────
+
+// Buy a pickaxe: deduct PICKAXE_COST coins, add PICKAXE_HITS swings.
+app.post('/api/mine/buy', authMiddleware, (req, res) => {
+  try {
+    const result = buyPickaxe(req.tgUser.id);
+    io.to(`user:${req.tgUser.id}`).emit('user_update', {
+      newCoins:    result.newCoins,
+      pickaxeHits: result.pickaxeHits,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Swing once: costs 1 hit, MINE_HIT_CHANCE to find a random letter.
+app.post('/api/mine/swing', authMiddleware, (req, res) => {
+  try {
+    const result = mineSwing(req.tgUser.id);
+    const update = { pickaxeHits: result.hitsLeft };
+    if (result.found) update.newInventory = result.newInventory;
+    io.to(`user:${req.tgUser.id}`).emit('user_update', update);
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });

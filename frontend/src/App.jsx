@@ -472,6 +472,7 @@ export default function App() {
         initData={initData}
         coins={user?.coins ?? 0}
         inventory={inventory}
+        pickaxeHits={user?.pickaxeHits ?? 0}
         onPurchase={handlePurchase}
         onPromptFired={handlePromptFired}
         socket={socket}

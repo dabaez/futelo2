@@ -62,6 +62,7 @@ export default function ShopModal({
   initData,
   coins,
   inventory,
+  pickaxeHits: initialPickaxeHits = 0,
   onPurchase,
   onPromptFired,
   socket,
@@ -75,6 +76,7 @@ export default function ShopModal({
     SELL_BASE_PRICE: 15, MARKET_MAX_PRICE: 500,
     PROMPT_BUY_COST: 200, PROMPT_WINNER_BONUS: 100,
     PROMPT_RUNNER_UP_BONUS: 30, PROMPT_DURATION_SEC: 180,
+    PICKAXE_COST: 30, PICKAXE_HITS: 10, MINE_HIT_CHANCE: 0.4,
   });
 
   // ── Roll tab state ───────────────────────────────────────────────────────
@@ -96,6 +98,14 @@ export default function ShopModal({
   const [listing, setListing]                 = useState(false);
   const [listError, setListError]             = useState(null);
   const [cancelling, setCancelling]           = useState(null); // listingId
+
+  // ── Mining tab state ─────────────────────────────────────────────────────
+  const [hitsLeft, setHitsLeft]       = useState(initialPickaxeHits);
+  const [buyingPickaxe, setBuyingPickaxe] = useState(false);
+  const [swinging, setSwinging]       = useState(false);
+  const [swingResult, setSwingResult] = useState(null); // { found, letter } | null
+  const [mineError, setMineError]     = useState(null);
+  const [swingState, setSwingState]   = useState('idle'); // 'idle'|'swinging'|'miss'|'found'
 
   // ── Prompt tab state ─────────────────────────────────────────────────────
   const [firingPrompt, setFiringPrompt] = useState(false);
@@ -177,8 +187,16 @@ export default function ShopModal({
       setSelectedLetter(null);
       setListingPrice('');
       setPromptError(null);
+      setMineError(null);
+      setSwingResult(null);
+      setSwingState('idle');
     }
   }, [isOpen]);
+
+  // Keep hitsLeft in sync when parent pushes a new value (socket user_update)
+  useEffect(() => {
+    setHitsLeft(initialPickaxeHits);
+  }, [initialPickaxeHits]);
 
   // ── Derived: dynamic roll cost (base + scale × total levels owned) ──────
   const totalLevels = Object.values(inventory || {}).reduce((s, v) => s + v, 0);
@@ -334,6 +352,7 @@ export default function ShopModal({
     { id: 'buy',    label: '🛒' },
     { id: 'sell',   label: '💰' },
     { id: 'prompt', label: '📣' },
+    { id: 'mine',   label: '⛏️' },
   ];
 
   return (
@@ -626,9 +645,159 @@ export default function ShopModal({
             </div>
           )}
 
+          {/* ── ⛏️ Minas tab ───────────────────────────────────────── */}
+          {activeTab === 'mine' && (
+            <div className="flex flex-col gap-4">
+              {/* ── No pickaxe sub-view ─── */}
+              {hitsLeft <= 0 && (
+                <>
+                  <div className="text-center text-5xl py-4">🪨</div>
+                  <p className="text-sm text-tg-hint text-center">
+                    Las minas de letras te esperan. Compra un pico para empezar a excavar.
+                  </p>
+                  <div className="bg-tg-bg-sec rounded-xl p-3 text-xs text-tg-hint space-y-1">
+                    <p>⛏️ Golpes por pico: {cfg.PICKAXE_HITS}</p>
+                    <p>🎲 Probabilidad de hallar letra: {Math.round(cfg.MINE_HIT_CHANCE * 100)}%</p>
+                  </div>
+                  {mineError && (
+                    <p className="text-xs text-red-500 text-center">{mineError}</p>
+                  )}
+                  <button
+                    onClick={async () => {
+                      if (buyingPickaxe || coins < cfg.PICKAXE_COST) return;
+                      setBuyingPickaxe(true);
+                      setMineError(null);
+                      try {
+                        const r = await fetch('/api/mine/buy', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', 'x-init-data': initData || '' },
+                        });
+                        const data = await safeJson(r);
+                        if (!r.ok) throw new Error(data?.error || 'Error al comprar el pico.');
+                        setHitsLeft(data.pickaxeHits);
+                        onPurchase?.({ newCoins: data.newCoins });
+                      } catch (e) {
+                        setMineError(e.message);
+                      } finally {
+                        setBuyingPickaxe(false);
+                      }
+                    }}
+                    disabled={buyingPickaxe || coins < cfg.PICKAXE_COST}
+                    className="bg-tg-button text-tg-btn-text font-semibold rounded-xl py-3 active:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {buyingPickaxe ? '…' : `Comprar pico — ${cfg.PICKAXE_COST} 🪙`}
+                  </button>
+                  <p className="text-xs text-tg-hint text-center">Saldo actual: {coins} 🪙</p>
+                </>
+              )}
+
+              {/* ── Mining sub-view ─── */}
+              {hitsLeft > 0 && (
+                <>
+                  {/* Rock / result display */}
+                  <div className="flex flex-col items-center gap-3 py-4">
+                    {swingState === 'idle' && (
+                      <span className="text-7xl select-none">🪨</span>
+                    )}
+                    {swingState === 'swinging' && (
+                      <span className="text-7xl select-none animate-bounce">⛏️</span>
+                    )}
+                    {swingState === 'miss' && (
+                      <>
+                        <span className="text-7xl select-none">🪨</span>
+                        <p className="text-sm text-tg-hint">💨 Nada esta vez…</p>
+                      </>
+                    )}
+                    {swingState === 'found' && swingResult && (
+                      <>
+                        <span className="text-5xl select-none">💥</span>
+                        <div className="mt-1 bg-tg-button/20 border border-tg-button/40 rounded-xl px-6 py-3 text-center">
+                          <span className="text-4xl font-bold text-tg-button uppercase">{swingResult.letter}</span>
+                        </div>
+                        <p className="text-xs text-tg-hint">¡Encontraste una letra!</p>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Hit counter */}
+                  <div className="flex justify-center">
+                    <span className="text-sm text-tg-hint">⛏️ Golpes restantes: <strong className="text-tg-text">{hitsLeft}</strong></span>
+                  </div>
+
+                  {mineError && (
+                    <p className="text-xs text-red-500 text-center">{mineError}</p>
+                  )}
+
+                  {/* Swing button */}
+                  <button
+                    onClick={async () => {
+                      if (swinging) return;
+                      setSwinging(true);
+                      setSwingState('swinging');
+                      setMineError(null);
+                      try {
+                        const r = await fetch('/api/mine/swing', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', 'x-init-data': initData || '' },
+                        });
+                        const data = await safeJson(r);
+                        if (!r.ok) throw new Error(data?.error || 'Error al excavar.');
+                        setHitsLeft(data.hitsLeft);
+                        if (data.found) {
+                          setSwingResult({ letter: data.letter });
+                          setSwingState('found');
+                          onPurchase?.({ newInventory: data.newInventory });
+                          window.Telegram?.WebApp?.HapticFeedback?.impactOccurred('medium');
+                        } else {
+                          setSwingResult(null);
+                          setSwingState('miss');
+                        }
+                      } catch (e) {
+                        setMineError(e.message);
+                        setSwingState('idle');
+                      } finally {
+                        setSwinging(false);
+                      }
+                    }}
+                    disabled={swinging || hitsLeft <= 0}
+                    className="bg-tg-button text-tg-btn-text font-semibold rounded-xl py-3 active:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {swinging ? 'Golpeando…' : '⛏️ Golpear roca'}
+                  </button>
+
+                  {/* Buy more pickaxes inline */}
+                  <button
+                    onClick={async () => {
+                      if (buyingPickaxe || coins < cfg.PICKAXE_COST) return;
+                      setBuyingPickaxe(true);
+                      setMineError(null);
+                      try {
+                        const r = await fetch('/api/mine/buy', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', 'x-init-data': initData || '' },
+                        });
+                        const data = await safeJson(r);
+                        if (!r.ok) throw new Error(data?.error || 'Error al comprar el pico.');
+                        setHitsLeft(data.pickaxeHits);
+                        onPurchase?.({ newCoins: data.newCoins });
+                      } catch (e) {
+                        setMineError(e.message);
+                      } finally {
+                        setBuyingPickaxe(false);
+                      }
+                    }}
+                    disabled={buyingPickaxe || coins < cfg.PICKAXE_COST}
+                    className="text-sm text-tg-hint border border-tg-bg-sec rounded-xl py-2.5 active:opacity-60 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {buyingPickaxe ? '…' : `+${cfg.PICKAXE_HITS} golpes — ${cfg.PICKAXE_COST} 🪙`}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
         </div>
       </div>
     </div>
   );
 }
-

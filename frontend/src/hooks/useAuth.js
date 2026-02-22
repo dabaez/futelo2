@@ -36,7 +36,10 @@ export function useAuth(initData) {
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);
-        setUser(data.user);
+        setUser({
+          ...data.user,
+          pickaxeHits: data.user.pickaxe_hits ?? 0,
+        });
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
@@ -53,6 +56,7 @@ export function useAuth(initData) {
         lockedLetters: patch.lockedLetter
           ? [...(prev.lockedLetters || []), patch.lockedLetter]
           : prev.lockedLetters,
+        pickaxeHits:   patch.pickaxeHits  ?? prev.pickaxeHits,
       };
     });
   }, []);

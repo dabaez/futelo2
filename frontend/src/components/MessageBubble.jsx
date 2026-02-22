@@ -20,7 +20,7 @@ const TIER_META = {
 
 function Avatar({ photoUrl, firstName, size = 8 }) {
   const initials = (firstName || '?').charAt(0).toUpperCase();
-  const cls = `w-${size} h-${size} rounded-full flex-shrink-0 flex items-center justify-center text-sm font-semibold text-white select-none`;
+  const cls = `w-${size} h-${size} rounded-full flex-shrink-0 self-start flex items-center justify-center text-sm font-semibold text-white select-none`;
 
   if (photoUrl) {
     return <img src={photoUrl} alt={firstName} className={`${cls} object-cover`} />;

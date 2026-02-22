@@ -98,7 +98,7 @@ db.exec(`
 // Migrations never need to be run manually — they apply automatically on startup.
 //
 // IMPORTANT: never edit a past migration. Always append a new one.
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 const migrations = [
   // ── v1: P2P letter market ─────────────────────────────────────────────────
@@ -215,7 +215,14 @@ const migrations = [
       CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, delivered);
     `);
   },
-];
+  // ── v7: Letter mines — pickaxe hit counter ────────────────────────────────
+  // Adds a persistent swing counter to every user row. Each purchased pickaxe
+  // adds PICKAXE_HITS to this value; each mine swing decrements it by 1.
+  // Stored on the users table (not in inventory_json) so computeRollCost is
+  // not affected by the mining economy.
+  () => {
+    db.exec('ALTER TABLE users ADD COLUMN pickaxe_hits INTEGER NOT NULL DEFAULT 0');
+  },];
 
 // Apply any pending migrations inside a single transaction so a crash mid-way
 // leaves the DB at the last successfully completed version.
@@ -367,6 +374,14 @@ const stmts = {
   `),
   getUserBetCountInRound: db.prepare(
     'SELECT COUNT(*) as count FROM lottery_bets WHERE round_id = ? AND user_id = ?'
+  ),
+
+  // ── Mining / pickaxe ─────────────────────────────────────────────────────────
+  addPickaxeHits: db.prepare(
+    'UPDATE users SET pickaxe_hits = MIN(pickaxe_hits + ?, 9999) WHERE id = ?'
+  ),
+  usePickaxeHit: db.prepare(
+    'UPDATE users SET pickaxe_hits = MAX(0, pickaxe_hits - 1) WHERE id = ?'
   ),
 
   // ── Notifications ─────────────────────────────────────────────────────────────

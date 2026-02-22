@@ -129,6 +129,14 @@ module.exports = {
     'El crupier salió a fumar. Intenta de nuevo.',
     'Apuesta rechazada por exceso de optimismo.',
   ],
+  // ── Letter mines / pickaxe ─────────────────────────────────────────────────
+  /** Coins paid to buy one pickaxe (adds PICKAXE_HITS swings). */
+  PICKAXE_COST: 30,
+  /** Number of swings a single pickaxe purchase provides. */
+  PICKAXE_HITS: 10,
+  /** Probability (0–1) that a single swing uncovers a letter. */
+  MINE_HIT_CHANCE: 0.4,
+
   // ── Prompt question pool ────────────────────────────────────────────────────
   /**
    * The pool of questions the auto-scheduler (and pickNextPrompt) draws from.
