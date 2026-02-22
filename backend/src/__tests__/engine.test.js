@@ -26,16 +26,20 @@ let _locks;
 const mockTransaction = jest.fn((fn) => () => fn());
 
 const mockStmts = {
-  getUser:         { get: jest.fn() },
-  getLocks:        { all: jest.fn() },
-  getState:        { get: jest.fn() },
-  setState:        { run: jest.fn() },
-  updateUser:      { run: jest.fn() },
-  updateCoins:     { run: jest.fn() },
-  updateInventory: { run: jest.fn() },
-  upsertLock:      { run: jest.fn() },
-  cleanLocks:      { run: jest.fn() },
-  insertMessage:   { run: jest.fn(() => ({ lastInsertRowid: 1 })) },
+  getUser:              { get: jest.fn() },
+  getLocks:             { all: jest.fn() },
+  getState:             { get: jest.fn() },
+  setState:             { run: jest.fn() },
+  updateUser:           { run: jest.fn() },
+  updateCoins:          { run: jest.fn() },
+  updateInventory:      { run: jest.fn() },
+  upsertLock:           { run: jest.fn() },
+  cleanLocks:           { run: jest.fn() },
+  insertMessage:        { run: jest.fn(() => ({ lastInsertRowid: 1 })) },
+  // Default to cnt=1 (not a first message) so standard tier tests work unchanged.
+  // Individual tests can override with mockReturnValueOnce({ cnt: 0 }) to test
+  // the first-message letter-grant path.
+  getUserMessageCount:  { get: jest.fn(() => ({ cnt: 1 })) },
 };
 
 jest.mock('../db/database', () => ({
@@ -47,6 +51,7 @@ jest.mock('../db/database', () => ({
 // Import engine AFTER the mock is set up
 const { processMessage, shopRoll, letterRequirements } = require('../engine/processMessage');
 const { requireUser, stmts } = require('../db/database');
+const { MAX_LETTER_LEVEL } = require('../config');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function makeUser(overrides = {}) {
@@ -84,6 +89,8 @@ beforeEach(() => {
   mockTransaction.mockImplementation((fn) => () => fn());
   // processMessage destructures { lastInsertRowid } from this call
   mockStmts.insertMessage.run.mockReturnValue({ lastInsertRowid: 1 });
+  // Default: not a first message (cnt > 0 means the user has sent before)
+  mockStmts.getUserMessageCount.get.mockReturnValue({ cnt: 1 });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,19 +105,33 @@ describe('letterRequirements', () => {
     expect(letterRequirements('HELLO')).toEqual({ h: 1, e: 1, l: 2, o: 1 });
   });
 
-  test('ignores spaces and punctuation', () => {
-    const req = letterRequirements('hi there!');
+  test('ignores spaces and characters outside the inventory system', () => {
+    // '^' and '%' are not in SYMBOL_CHARS and not digits, so they are ignored
+    const req = letterRequirements('hi there^%');
     expect(req).toEqual({ h: 2, i: 1, t: 1, e: 2, r: 1 });
     expect(req[' ']).toBeUndefined();
-    expect(req['!']).toBeUndefined();
+    expect(req['^']).toBeUndefined();
   });
 
   test('returns empty object for empty string', () => {
     expect(letterRequirements('')).toEqual({});
   });
 
-  test('returns empty object for numbers and symbols only', () => {
-    expect(letterRequirements('12345 !@#$')).toEqual({});
+  test('counts digits (0-9) into the _numbers group key', () => {
+    expect(letterRequirements('abc 123')).toEqual({ a: 1, b: 1, c: 1, _numbers: 3 });
+  });
+
+  test('counts SYMBOL_CHARS characters into the _symbols group key', () => {
+    // '!' and '?' are in SYMBOL_CHARS; '$' and '^' are not
+    expect(letterRequirements('hola!?$^')).toEqual({ h: 1, o: 1, l: 1, a: 1, _symbols: 2 });
+  });
+
+  test('counts letters, digits, and symbols together', () => {
+    expect(letterRequirements('hi 3!')).toEqual({ h: 1, i: 1, _numbers: 1, _symbols: 1 });
+  });
+
+  test('returns empty object when text contains only ignored characters', () => {
+    expect(letterRequirements('   ^$~')).toEqual({});
   });
 
   it('counts ñ correctly', () => {
@@ -137,6 +158,20 @@ describe('processMessage – validation', () => {
     expect(() => processMessage(1, 'aaaaaa')).toThrow(/insuficiente/i);
   });
 
+  test('throws when _numbers inventory is insufficient', () => {
+    // Inventory has _numbers:1 but message needs 2 digits
+    setupUser(makeUser({ inventory_json: JSON.stringify({ h: 1, _numbers: 1 }) }));
+    setupGameState();
+    expect(() => processMessage(1, 'h 12')).toThrow(/insuficiente/i);
+  });
+
+  test('throws when _symbols inventory is insufficient', () => {
+    // Inventory has _symbols:1 but message needs 2 symbols
+    setupUser(makeUser({ inventory_json: JSON.stringify({ h: 1, _symbols: 1 }) }));
+    setupGameState();
+    expect(() => processMessage(1, 'h!?')).toThrow(/insuficiente/i);
+  });
+
   test('throws when a required letter is locked', () => {
     setupUser(makeUser({ inventory_json: JSON.stringify({ a: 5 }) }));
     setupGameState({ locks: [{ letter: 'a' }] });
@@ -157,7 +192,7 @@ describe('processMessage – validation', () => {
 // processMessage – Tier 1 (different user sent last)
 // ─────────────────────────────────────────────────────────────────────────────
 describe('processMessage – Tier 1 (different user)', () => {
-  test('returns tier 1, +10 coins, 2 new letters', () => {
+  test('returns tier 1, +10 coins, 0 new letters', () => {
     const user = makeUser({ coins: 100 });
     setupUser(user);
     setupGameState({ lastSenderId: 999 }); // different user
@@ -169,7 +204,8 @@ describe('processMessage – Tier 1 (different user)', () => {
 
     expect(result.tier).toBe(1);
     expect(result.coinDelta).toBe(10);
-    expect(result.newLetters).toHaveLength(2);
+    // Letters are only granted on first message or via shop roll, not per tier.
+    expect(result.newLetters).toHaveLength(0);
     expect(result.lockedLetter).toBeNull();
     expect(result.newCoins).toBe(110);
   });
@@ -183,7 +219,7 @@ describe('processMessage – Tier 1 (different user)', () => {
     expect(result.newStreak).toBe(1);
   });
 
-  test('new letters are added to the inventory', () => {
+  test('inventory is unchanged after a tier-1 message (no per-tier letter grant)', () => {
     const invBefore = { a: 1 };
     setupUser(makeUser({ inventory_json: JSON.stringify(invBefore) }));
     setupGameState({ lastSenderId: 999 });
@@ -191,13 +227,9 @@ describe('processMessage – Tier 1 (different user)', () => {
 
     const result = processMessage(1, 'a');
 
-    // Each of the 2 new letters should be incremented in newInventory
-    expect(result.newLetters).toHaveLength(2);
-    for (const letter of result.newLetters) {
-      expect(result.newInventory[letter]).toBeGreaterThan(
-        invBefore[letter] || 0
-      );
-    }
+    // Tier-1 grants no letters; inventory should be identical to before.
+    expect(result.newLetters).toHaveLength(0);
+    expect(result.newInventory).toEqual(invBefore);
   });
 });
 
@@ -269,6 +301,18 @@ describe('processMessage – Tier 3 (spam penalty)', () => {
     expect(result.tier).toBe(3);
     expect(result.newStreak).toBe(6);
   });
+
+  test('coins are clamped to 0 when the Tier-3 penalty exceeds the balance', () => {
+    // User has only 20 coins; penalty is 50 → DB clamps to 0
+    setupUser(makeUser({ streak_count: 2, coins: 20, inventory_json: JSON.stringify({ a: 3 }) }));
+    setupGameState({ lastSenderId: 1 });
+    // Simulate the DB MAX(0, …) clamping: fresh read returns 0, not -30
+    stmts.getUser.get.mockReturnValue(makeUser({ coins: 0 }));
+
+    const result = processMessage(1, 'a');
+    expect(result.tier).toBe(3);
+    expect(result.newCoins).toBe(0);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -329,4 +373,22 @@ describe('shopRoll', () => {
       expect(result.newInventory[letter]).toBeGreaterThanOrEqual(1);
     }
   });
+
+  test('letter level is capped at MAX_LETTER_LEVEL even when the letter is already maxed', () => {
+    // Pre-fill every possible inventory key at the cap so any roll hits a maxed slot.
+    // WEIGHTED_POOL includes _numbers and _symbols, so those must be seeded too.
+    const fullInv = {};
+    for (const l of 'abcdefghijklmnopqrstuvwxyzñ') fullInv[l] = MAX_LETTER_LEVEL;
+    fullInv._numbers = MAX_LETTER_LEVEL;
+    fullInv._symbols = MAX_LETTER_LEVEL;
+    const user = makeUser({ coins: 500, inventory_json: JSON.stringify(fullInv) });
+    requireUser.mockReturnValue(user);
+    stmts.getUser.get.mockReturnValue({ ...user, coins: 150 });
+
+    const result = shopRoll(1);
+    for (const letter of result.newLetters) {
+      expect(result.newInventory[letter]).toBe(MAX_LETTER_LEVEL);
+    }
+  });
 });
+
