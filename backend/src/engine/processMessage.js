@@ -203,6 +203,16 @@ function processMessage(userId, text) {
     newLetters = randomLetters(FIRST_MESSAGE_LETTERS);
   }
 
+  // ── Step 5b: Block Tier-3 if user cannot cover the penalty ───────────────
+  // We check this BEFORE the transaction so the message is fully rejected and
+  // no DB state is modified when the user is too broke to spam.
+  if (tier === 3 && user.coins < TIER3_PENALTY) {
+    throw new Error(
+      `No puedes enviar otro mensaje seguido: la penalización sería de ${TIER3_PENALTY} 🪙 ` +
+      `pero solo tienes ${user.coins} 🪙. ¡Deja hablar a alguien más primero!`
+    );
+  }
+
   // ── Step 6: Apply everything inside one transaction ───────────────────────
   const result = db.transaction(() => {
     // Build updated inventory: increment unlock levels for new letters (capped at MAX_LETTER_LEVEL)

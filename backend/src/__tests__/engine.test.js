@@ -302,12 +302,19 @@ describe('processMessage – Tier 3 (spam penalty)', () => {
     expect(result.newStreak).toBe(6);
   });
 
-  test('coins are clamped to 0 when the Tier-3 penalty exceeds the balance', () => {
-    // User has only 20 coins; penalty is 50 → DB clamps to 0
+  test('throws when user cannot cover the Tier-3 penalty', () => {
+    // User has only 20 coins; penalty is 50 → message is blocked entirely
     setupUser(makeUser({ streak_count: 2, coins: 20, inventory_json: JSON.stringify({ a: 3 }) }));
     setupGameState({ lastSenderId: 1 });
-    // Simulate the DB MAX(0, …) clamping: fresh read returns 0, not -30
-    stmts.getUser.get.mockReturnValue(makeUser({ coins: 0 }));
+
+    expect(() => processMessage(1, 'a')).toThrow(/penalizaci/i);
+  });
+
+  test('allows the message when coins exactly equal the Tier-3 penalty', () => {
+    // User has exactly 50 coins – just enough to pay the penalty
+    setupUser(makeUser({ streak_count: 2, coins: 50, inventory_json: JSON.stringify({ a: 3 }) }));
+    setupGameState({ lastSenderId: 1 });
+    stmts.getUser.get.mockReturnValue(makeUser({ coins: 0 })); // 50 - 50 = 0 after penalty
 
     const result = processMessage(1, 'a');
     expect(result.tier).toBe(3);
