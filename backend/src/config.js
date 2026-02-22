@@ -131,11 +131,11 @@ module.exports = {
   ],
   // ── Letter mines / pickaxe ─────────────────────────────────────────────────
   /** Coins paid to buy one pickaxe (adds PICKAXE_HITS swings). */
-  PICKAXE_COST: 30,
+  PICKAXE_COST: 100,
   /** Number of swings a single pickaxe purchase provides. */
-  PICKAXE_HITS: 10,
+  PICKAXE_HITS: 1000,
   /** Probability (0–1) that a single swing uncovers a letter. */
-  MINE_HIT_CHANCE: 0.4,
+  MINE_HIT_CHANCE: 0.01,
 
   // ── Prompt question pool ────────────────────────────────────────────────────
   /**

@@ -325,7 +325,8 @@ export default function App() {
       newCoins:     result.newCoins     ?? result.newInventory ? result.newCoins : undefined,
       newInventory: result.newInventory,
     });
-    if (result.letter) {
+    // newCoins is only present in the buy response; list response omits it
+    if (result.letter && result.newCoins !== undefined) {
       showToast(`🛒 Compraste "${result.letter.toUpperCase()}" por ${result.price} 🪙`, 'success');
     }
   }, [updateUser]);
@@ -499,7 +500,6 @@ export default function App() {
         lotteryRound={lotteryRound}
         carryOver={lotteryCarryOver}
         onLotteryStarted={handleLotteryStarted}
-        onError={(msg) => showToast(msg, 'warn', { duration: 4000 })}
         cfg={lotteryCfg}
       />
       {/* ── Toast notification ──────────────────────────────────────────── */}

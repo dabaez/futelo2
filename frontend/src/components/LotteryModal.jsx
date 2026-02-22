@@ -41,7 +41,6 @@ export default function LotteryModal({
   carryOver,     // accumulated jackpot from previous rounds
   onLotteryStarted,
   onBetPlaced,
-  onError,       // (message) => void  — shown as a toast by App.jsx
   cfg,
 }) {
   const [loading, setLoading]         = useState(false);
@@ -104,7 +103,6 @@ export default function LotteryModal({
       setPick(null);
     } catch (e) {
       setError(e.message);
-      onError?.(e.message);
     }
     finally { setLoading(false); }
   }, [pick, loading, lotteryRound, inventory, initData, onBetPlaced]);
