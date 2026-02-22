@@ -100,10 +100,9 @@ Requires:
 
 **Mercado negro** — deferred, risky:
 - The letter level is escrowed and listed.
-- Earn more coins (no commission) if you collect before being caught.
-- The server periodically checks active listings against a catch probability driven by the global **heat level**. Getting caught incurs a coin fine and raises heat further.
-- Mentioning "mercado negro" in chat also raises heat.
-- Uncollected listings expire after a set time; the letter is returned, no coins awarded.
+- No commission — but selling here is not without consequences.
+- Something watches. Get caught and you'll be fined. Talk about it and things get worse.
+- Listings don't last forever.
 
 ### Community Prompts
 

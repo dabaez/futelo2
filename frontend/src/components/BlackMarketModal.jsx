@@ -269,27 +269,6 @@ export default function BlackMarketModal({
           ))}
         </div>
 
-        {/* Heat level indicator */}
-        <div className="px-4 py-2 border-b border-zinc-800 shrink-0">
-          <div className="flex items-center justify-between text-xs text-zinc-500 mb-1.5">
-            <span>🌡️ Calor del mercado</span>
-            <span className="tabular-nums">
-              {(catchProb * 100).toFixed(0)}% riesgo por chequeo
-              {' · '}multa {catchFine} 🪙
-              {' · '}expira en {expiryHours}h
-            </span>
-          </div>
-          <div className="w-full h-1.5 bg-zinc-700 rounded-full overflow-hidden">
-            <div
-              className="h-full rounded-full transition-all duration-700"
-              style={{
-                width: `${Math.min(100, heat)}%`,
-                backgroundColor: heat < 33 ? '#22c55e' : heat < 66 ? '#eab308' : '#ef4444',
-              }}
-            />
-          </div>
-        </div>
-
         {/* Tab content */}
         <div className="overflow-y-auto flex-1 p-4 flex flex-col gap-3">
 
