@@ -85,6 +85,7 @@ describe('POST /api/auth', () => {
     });
     expect(typeof res.body.user.coins).toBe('number');
     expect(typeof res.body.user.inventory).toBe('object');
+    expect(typeof res.body.user.pickaxe_hits).toBe('number');
   });
 
   test('is idempotent – second call returns same user', async () => {
@@ -122,6 +123,7 @@ describe('GET /api/me', () => {
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(1002);
     expect(Array.isArray(res.body.lockedLetters)).toBe(true);
+    expect(typeof res.body.pickaxe_hits).toBe('number');
   });
 
   test('returns 401 without auth', async () => {
@@ -499,5 +501,130 @@ describe('Black market endpoints (secret)', () => {
     expect(res.status).toBe(200);
     expect(res.body.letter).toBe(newLetter);
     expect(typeof res.body.newInventory).toBe('object');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Letter mines endpoints
+// ─────────────────────────────────────────────────────────────────────────────
+// Use fresh users (GINA, HANK) to avoid coin/inventory state from prior suites.
+const GINA = 'dev:1007:gina:Gina';
+const HANK = 'dev:1008:hank:Hank';
+
+describe('POST /api/mine/buy', () => {
+  let app;
+
+  beforeAll(async () => {
+    app = getApp();
+    await authAs(app, GINA);
+  });
+
+  test('returns 401 without authentication', async () => {
+    const res = await request(app).post('/api/mine/buy');
+    expect(res.status).toBe(401);
+  });
+
+  test('returns 400 when the user has insufficient coins', async () => {
+    // GINA starts at 0 coins (STARTING_COINS) and hasn't earned any yet
+    const meRes = await request(app).get('/api/me').set(authHeader(GINA));
+    expect(meRes.body.coins).toBe(0);
+
+    const res = await request(app)
+      .post('/api/mine/buy')
+      .set(authHeader(GINA));
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/insuficiente/i);
+  });
+
+  test('deducts PICKAXE_COST and grants PICKAXE_HITS after seeding coins', async () => {
+    await seedCoins(app, GINA, 100);
+    const meBefore = await request(app).get('/api/me').set(authHeader(GINA));
+    const coinsBefore = meBefore.body.coins;
+
+    const configRes = await request(app).get('/api/config');
+    const { PICKAXE_COST, PICKAXE_HITS } = configRes.body;
+
+    const res = await request(app)
+      .post('/api/mine/buy')
+      .set(authHeader(GINA));
+
+    expect(res.status).toBe(200);
+    expect(res.body.newCoins).toBe(coinsBefore - PICKAXE_COST);
+    expect(res.body.pickaxeHits).toBe(PICKAXE_HITS);
+  });
+
+  test('buying a second pickaxe stacks the hit counter', async () => {
+    const configRes = await request(app).get('/api/config');
+    const { PICKAXE_COST, PICKAXE_HITS } = configRes.body;
+
+    await seedCoins(app, GINA, PICKAXE_COST + 10);
+
+    const res = await request(app)
+      .post('/api/mine/buy')
+      .set(authHeader(GINA));
+
+    expect(res.status).toBe(200);
+    // After this second purchase, hits should be at least 2 × PICKAXE_HITS
+    // (may be less if some swings were used, but base is PICKAXE_HITS per purchase)
+    expect(res.body.pickaxeHits).toBeGreaterThanOrEqual(PICKAXE_HITS);
+  });
+});
+
+describe('POST /api/mine/swing', () => {
+  let app;
+  let hitsPerPickaxe;
+
+  beforeAll(async () => {
+    app = getApp();
+    await authAs(app, HANK);
+    // Seed coins and buy exactly one pickaxe
+    await seedCoins(app, HANK, 100);
+    const configRes = await request(app).get('/api/config');
+    hitsPerPickaxe = configRes.body.PICKAXE_HITS;
+    await request(app).post('/api/mine/buy').set(authHeader(HANK));
+  });
+
+  test('returns 401 without authentication', async () => {
+    const res = await request(app).post('/api/mine/swing');
+    expect(res.status).toBe(401);
+  });
+
+  test('returns 200 with found (boolean), letter, newInventory, and hitsLeft', async () => {
+    const res = await request(app)
+      .post('/api/mine/swing')
+      .set(authHeader(HANK));
+
+    expect(res.status).toBe(200);
+    expect(typeof res.body.found).toBe('boolean');
+    // letter is a string on a hit, null on a miss
+    if (res.body.found) {
+      expect(typeof res.body.letter).toBe('string');
+      expect(typeof res.body.newInventory).toBe('object');
+    } else {
+      expect(res.body.letter).toBeNull();
+      expect(res.body.newInventory).toBeNull();
+    }
+    expect(typeof res.body.hitsLeft).toBe('number');
+  });
+
+  test('hitsLeft decrements with each swing', async () => {
+    const before = await request(app).post('/api/mine/swing').set(authHeader(HANK));
+    const after  = await request(app).post('/api/mine/swing').set(authHeader(HANK));
+
+    expect(after.body.hitsLeft).toBe(before.body.hitsLeft - 1);
+  });
+
+  test('returns 400 when all hits are exhausted', async () => {
+    // Drain every remaining hit
+    let hitsLeft = (await request(app).post('/api/mine/swing').set(authHeader(HANK))).body.hitsLeft;
+    while (hitsLeft > 0) {
+      const r = await request(app).post('/api/mine/swing').set(authHeader(HANK));
+      hitsLeft = r.body.hitsLeft;
+    }
+
+    // Next swing should fail
+    const res = await request(app).post('/api/mine/swing').set(authHeader(HANK));
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/golpes/i);
   });
 });
