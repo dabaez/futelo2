@@ -232,4 +232,103 @@ describe('RestrictedKeyboard', () => {
     expect(onDraftChange).not.toHaveBeenCalled();
     expect(onSend).not.toHaveBeenCalled();
   });
+
+  // ── Number row ──────────────────────────────────────────────────────────────────────────
+  it('renders all 10 digit keys (0-9) after switching to symbols mode', () => {
+    render(
+      <RestrictedKeyboard
+        draft=""
+        onDraftChange={noop}
+        onSend={noop}
+        inventory={{ _numbers: 2 }}
+        lockedLetters={[]}
+      />
+    );
+    fireEvent.pointerDown(screen.getByRole('button', { name: '123' }));
+    for (const d of '0123456789') {
+      expect(screen.getByRole('button', { name: d })).toBeDefined();
+    }
+  });
+
+  it('shows group badge from inventory._numbers on digit keys', () => {
+    render(
+      <RestrictedKeyboard
+        draft=""
+        onDraftChange={noop}
+        onSend={noop}
+        inventory={{ _numbers: 4 }}
+        lockedLetters={[]}
+      />
+    );
+    fireEvent.pointerDown(screen.getByRole('button', { name: '123' }));
+    // All digit keys show the same pool remaining (4)
+    const badges = screen.getAllByText('4');
+    expect(badges.length).toBeGreaterThanOrEqual(10); // one per digit key
+  });
+
+  it('disables all digit keys when _numbers pool is exhausted', () => {
+    render(
+      <RestrictedKeyboard
+        draft=""
+        onDraftChange={noop}
+        onSend={noop}
+        inventory={{ _numbers: 0 }}
+        lockedLetters={[]}
+      />
+    );
+    fireEvent.pointerDown(screen.getByRole('button', { name: '123' }));
+    for (const d of '0123456789') {
+      expect(screen.getByRole('button', { name: `${d} (no stock)` })).toBeDisabled();
+    }
+  });
+
+  it('pressing a digit key appends it to draft when pool allows', () => {
+    const onDraftChange = vi.fn();
+    render(
+      <RestrictedKeyboard
+        draft="hi"
+        onDraftChange={onDraftChange}
+        onSend={noop}
+        inventory={{ h: 1, i: 1, _numbers: 3 }}
+        lockedLetters={[]}
+      />
+    );
+    fireEvent.pointerDown(screen.getByRole('button', { name: '123' }));
+    const btn5 = screen.getByRole('button', { name: '5' });
+    fireEvent.pointerDown(btn5);
+    expect(onDraftChange).toHaveBeenCalledWith('hi5');
+  });
+
+  // ── Symbol row ──────────────────────────────────────────────────────────────────────────
+  it('disables all symbol keys when _symbols pool is exhausted', () => {
+    render(
+      <RestrictedKeyboard
+        draft=""
+        onDraftChange={noop}
+        onSend={noop}
+        inventory={{ _symbols: 0 }}
+        lockedLetters={[]}
+      />
+    );
+    fireEvent.pointerDown(screen.getByRole('button', { name: '123' }));
+    expect(screen.getByRole('button', { name: '! (no stock)' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '? (no stock)' })).toBeDisabled();
+  });
+
+  it('pressing a symbol key appends it to draft when pool allows', () => {
+    const onDraftChange = vi.fn();
+    render(
+      <RestrictedKeyboard
+        draft="hola"
+        onDraftChange={onDraftChange}
+        onSend={noop}
+        inventory={{ h: 1, o: 1, l: 1, a: 1, _symbols: 2 }}
+        lockedLetters={[]}
+      />
+    );
+    fireEvent.pointerDown(screen.getByRole('button', { name: '123' }));
+    const qBtn = screen.getByRole('button', { name: '?' });
+    fireEvent.pointerDown(qBtn);
+    expect(onDraftChange).toHaveBeenCalledWith('hola?');
+  });
 });
