@@ -3,7 +3,7 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs   = require('fs');
-const { STARTING_COINS } = require('../config');
+const { STARTING_COINS, STARTING_INVENTORY } = require('../config');
 
 // Ensure data directory exists..
 // FUTELO_DATA_DIR can be overridden in tests to point at a temp location.
@@ -21,6 +21,7 @@ db.pragma('foreign_keys = ON');
 db.pragma('cache_size = -16000');   // 16 MB page cache
 
 // ── Schema ────────────────────────────────────────────────────────────────────
+// Baseline tables: present since day one. Safe to run on every start.
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY,          -- Telegram user_id
@@ -31,7 +32,7 @@ db.exec(`
     -- JSON object: { "a": 3, "b": 1, ... }
     -- Value = the maximum # of that letter usable per message (unlock level).
     -- Letters are NEVER consumed; they represent capacity limits.
-    inventory_json TEXT   NOT NULL DEFAULT '{}',
+    inventory_json TEXT   NOT NULL DEFAULT '${STARTING_INVENTORY}',
     streak_count  INTEGER NOT NULL DEFAULT 0,   -- consecutive self-messages
     created_at    INTEGER NOT NULL DEFAULT (strftime('%s','now'))
   );
@@ -88,24 +89,99 @@ db.exec(`
     voter_id  INTEGER NOT NULL REFERENCES users(id),
     PRIMARY KEY (reply_id, voter_id)
   );
-
-  -- ── Black market listings ───────────────────────────────────────────────────
-  -- A listing is created when a user puts a letter on the black market.
-  -- The letter level is escrowed immediately; the scheduler rolls for a
-  -- catch once per minute.  The user collects coins if not caught.
-  CREATE TABLE IF NOT EXISTS black_market_listings (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id      INTEGER NOT NULL REFERENCES users(id),
-    letter       TEXT    NOT NULL,
-    listed_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-    status       TEXT    NOT NULL DEFAULT 'pending',
-    -- status values: 'pending' | 'collected' | 'caught' | 'expired'
-    resolved_at  INTEGER,
-    coins_delta  INTEGER NOT NULL DEFAULT 0
-  );
-  CREATE INDEX IF NOT EXISTS idx_bml_pending ON black_market_listings(status, listed_at);
-  CREATE INDEX IF NOT EXISTS idx_bml_user    ON black_market_listings(user_id, status);
 `);
+
+// ── Migrations ────────────────────────────────────────────────────────────────
+// PRAGMA user_version stores the last applied migration index (0 = none applied).
+// To add a new migration: append a function to this array and bump SCHEMA_VERSION.
+// Each migration runs inside a transaction; user_version is updated atomically.
+// Migrations never need to be run manually — they apply automatically on startup.
+//
+// IMPORTANT: never edit a past migration. Always append a new one.
+const SCHEMA_VERSION = 3;
+
+const migrations = [
+  // ── v1: P2P letter market ─────────────────────────────────────────────────
+  // Drops any old market_listings table (pre-P2P schema) and recreates it with
+  // the correct columns. Open listings are lost, but that is acceptable because
+  // this migration only runs once on DBs that predate the P2P rewrite.
+  () => {
+    db.exec(`
+      DROP TABLE IF EXISTS market_listings;
+      CREATE TABLE market_listings (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        seller_id    INTEGER NOT NULL REFERENCES users(id),
+        letter       TEXT    NOT NULL,
+        price        INTEGER NOT NULL CHECK(price >= 1),
+        listed_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+        status       TEXT    NOT NULL DEFAULT 'open',
+        buyer_id     INTEGER REFERENCES users(id),
+        resolved_at  INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_ml_open   ON market_listings(status, listed_at);
+      CREATE INDEX IF NOT EXISTS idx_ml_seller ON market_listings(seller_id, status);
+    `);
+  },
+
+  // ── v2: Secret black market ───────────────────────────────────────────────
+  // Identical schema to market_listings but on a separate table so the two
+  // never share listings.
+  () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS black_market_listings (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        seller_id    INTEGER NOT NULL REFERENCES users(id),
+        letter       TEXT    NOT NULL,
+        price        INTEGER NOT NULL CHECK(price >= 1),
+        listed_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+        status       TEXT    NOT NULL DEFAULT 'open',
+        buyer_id     INTEGER REFERENCES users(id),
+        resolved_at  INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_bml_open   ON black_market_listings(status, listed_at);
+      CREATE INDEX IF NOT EXISTS idx_bml_seller ON black_market_listings(seller_id, status);
+    `);
+  },
+
+  // ── v3: Letter lottery ────────────────────────────────────────────────────
+  () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS lottery_rounds (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        secret_letter TEXT    NOT NULL,
+        jackpot       INTEGER NOT NULL DEFAULT 0,
+        status        TEXT    NOT NULL DEFAULT 'active',
+        started_by    INTEGER NOT NULL REFERENCES users(id),
+        closes_at     INTEGER NOT NULL,
+        created_at    INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+      );
+      CREATE TABLE IF NOT EXISTS lottery_bets (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        round_id   INTEGER NOT NULL REFERENCES lottery_rounds(id),
+        user_id    INTEGER NOT NULL REFERENCES users(id),
+        letter     TEXT    NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+        UNIQUE(round_id, user_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_lr_status ON lottery_rounds(status);
+      CREATE INDEX IF NOT EXISTS idx_lb_round  ON lottery_bets(round_id);
+    `);
+  },
+];
+
+// Apply any pending migrations inside a single transaction so a crash mid-way
+// leaves the DB at the last successfully completed version.
+db.transaction(() => {
+  const current = db.pragma('user_version', { simple: true });
+  if (current < SCHEMA_VERSION) {
+    console.log(`[DB] Applying migrations ${current + 1}..${SCHEMA_VERSION}`);
+  }
+  for (let i = current; i < SCHEMA_VERSION; i++) {
+    migrations[i]();
+    db.pragma(`user_version = ${i + 1}`);
+    console.log(`[DB] Migration ${i + 1} applied.`);
+  }
+})();
 
 // ── Prepared statements (reused across requests for performance) ──────────────
 const stmts = {
@@ -118,12 +194,12 @@ const stmts = {
       first_name = excluded.first_name,
       photo_url  = excluded.photo_url
   `),
-  updateCoins:    db.prepare('UPDATE users SET coins = coins + ? WHERE id = ?'),
+  updateCoins:    db.prepare('UPDATE users SET coins = MAX(0, coins + ?) WHERE id = ?'),
   updateStreak:   db.prepare('UPDATE users SET streak_count = ? WHERE id = ?'),
   updateInventory:db.prepare('UPDATE users SET inventory_json = ? WHERE id = ?'),
   updateUser:     db.prepare(`
     UPDATE users
-    SET coins = coins + @coinDelta,
+    SET coins = MAX(0, coins + @coinDelta),
         streak_count = @streak,
         inventory_json = @inventory
     WHERE id = @userId
@@ -142,6 +218,7 @@ const stmts = {
   getLocks:       db.prepare('SELECT letter FROM letter_locks WHERE user_id = ? AND locked_until > ?'),
   upsertLock:     db.prepare('INSERT OR REPLACE INTO letter_locks (user_id, letter, locked_until) VALUES (?, ?, ?)'),
   cleanLocks:     db.prepare('DELETE FROM letter_locks WHERE locked_until <= ?'),
+  getUserMessageCount: db.prepare('SELECT COUNT(*) AS cnt FROM messages WHERE user_id = ?'),
 
   // ── Prompts ──────────────────────────────────────────────────────────────
   getLastMessageTime: db.prepare('SELECT MAX(created_at) AS ts FROM messages'),
@@ -168,23 +245,76 @@ const stmts = {
   getVoteCount:   db.prepare('SELECT COUNT(*) AS votes FROM prompt_votes WHERE reply_id = ?'),
   hasVoted:       db.prepare('SELECT 1 FROM prompt_votes WHERE reply_id = ? AND voter_id = ?'),
 
-  // ── Black market listings ─────────────────────────────────────────────────
-  insertBmListing:      db.prepare('INSERT INTO black_market_listings (user_id, letter) VALUES (?, ?)'),
-  getBmListing:         db.prepare('SELECT * FROM black_market_listings WHERE id = ?'),
-  getActiveBmListing:   db.prepare(
-    "SELECT * FROM black_market_listings WHERE user_id = ? AND letter = ? AND status = 'pending'"
+  // ── P2P market listings ───────────────────────────────────────────────────
+  insertMarketListing:   db.prepare(
+    'INSERT INTO market_listings (seller_id, letter, price) VALUES (?, ?, ?)'
   ),
-  getPendingBmListings: db.prepare(
-    "SELECT * FROM black_market_listings WHERE status = 'pending' ORDER BY listed_at ASC"
+  getMarketListing:      db.prepare('SELECT * FROM market_listings WHERE id = ?'),
+  getOpenMarketListings: db.prepare(`
+    SELECT ml.id, ml.seller_id, ml.letter, ml.price, ml.listed_at,
+           u.username AS seller_username, u.first_name AS seller_first_name
+    FROM market_listings ml
+    JOIN users u ON u.id = ml.seller_id
+    WHERE ml.status = 'open'
+    ORDER BY ml.listed_at ASC
+  `),
+  getActiveSellerListing: db.prepare(
+    "SELECT * FROM market_listings WHERE seller_id = ? AND letter = ? AND status = 'open'"
   ),
-  getExpiredBmListings: db.prepare(
-    "SELECT * FROM black_market_listings WHERE status = 'pending' AND listed_at < ?"
+  resolveMarketListing:  db.prepare(
+    'UPDATE market_listings SET status = ?, buyer_id = ?, resolved_at = ? WHERE id = ?'
   ),
-  resolveBmListing:     db.prepare(
-    'UPDATE black_market_listings SET status = ?, coins_delta = ?, resolved_at = ? WHERE id = ?'
+  getUserMarketListings: db.prepare(
+    "SELECT * FROM market_listings WHERE seller_id = ? ORDER BY listed_at DESC LIMIT 20"
   ),
-  getUserBmListings:    db.prepare(
-    "SELECT * FROM black_market_listings WHERE user_id = ? ORDER BY listed_at DESC LIMIT 20"
+
+  // ── Black market listings ──────────────────────────────────────────────────
+  insertBmListing:  db.prepare(
+    'INSERT INTO black_market_listings (seller_id, letter, price) VALUES (?, ?, ?)'
+  ),
+  getBmListing:     db.prepare('SELECT * FROM black_market_listings WHERE id = ?'),
+  getOpenBmListings: db.prepare(`
+    SELECT bml.id, bml.seller_id, bml.letter, bml.price, bml.listed_at,
+           u.username AS seller_username, u.first_name AS seller_first_name
+    FROM black_market_listings bml
+    JOIN users u ON u.id = bml.seller_id
+    WHERE bml.status = 'open'
+    ORDER BY bml.listed_at ASC
+  `),
+  resolveBmListing: db.prepare(
+    'UPDATE black_market_listings SET status = ?, buyer_id = ?, resolved_at = ? WHERE id = ?'
+  ),
+  getUserBmListings: db.prepare(
+    "SELECT * FROM black_market_listings WHERE seller_id = ? ORDER BY listed_at DESC LIMIT 20"
+  ),
+
+  // ── Lottery ───────────────────────────────────────────────────────────────
+  insertLotteryRound:   db.prepare(
+    'INSERT INTO lottery_rounds (secret_letter, jackpot, started_by, closes_at) VALUES (?, ?, ?, ?)'
+  ),
+  getLotteryRoundById:  db.prepare('SELECT * FROM lottery_rounds WHERE id = ?'),
+  getActiveLotteryRound: db.prepare(
+    "SELECT * FROM lottery_rounds WHERE status = 'active' ORDER BY id DESC LIMIT 1"
+  ),
+  closeLotteryRound:    db.prepare("UPDATE lottery_rounds SET status = 'closed' WHERE id = ?"),
+  addJackpotToRound:    db.prepare('UPDATE lottery_rounds SET jackpot = jackpot + ? WHERE id = ?'),
+  insertLotteryBet:     db.prepare(
+    'INSERT OR IGNORE INTO lottery_bets (round_id, user_id, letter) VALUES (?, ?, ?)'
+  ),
+  getLotteryBetById:    db.prepare(`
+    SELECT lb.*, u.username, u.first_name
+    FROM lottery_bets lb JOIN users u ON u.id = lb.user_id
+    WHERE lb.id = ?
+  `),
+  getLotteryBets:       db.prepare(`
+    SELECT lb.id, lb.round_id, lb.user_id, lb.letter, lb.created_at,
+           u.username, u.first_name
+    FROM lottery_bets lb JOIN users u ON u.id = lb.user_id
+    WHERE lb.round_id = ?
+    ORDER BY lb.created_at ASC
+  `),
+  getUserLotteryBet:    db.prepare(
+    'SELECT * FROM lottery_bets WHERE round_id = ? AND user_id = ?'
   ),
 };
 

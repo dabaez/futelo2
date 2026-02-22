@@ -12,37 +12,70 @@
  *   may include in any single message (unlock level, never consumed).
  *
  * Coin Tiers
- *   Tier 1 – different user sent last  →  +10 coins, 2 random letters
- *   Tier 2 – same user, streak == 2    →  0 coins, 0 letters  (warning)
+ *   Tier 1 – different user sent last  →  +10 coins
+ *   Tier 2 – same user, streak == 2    →  0 coins               (warning)
  *   Tier 3 – same user, streak >= 3    →  -50 coins, 1 letter locked 5 min
+ *
+ * First-message bonus
+ *   On a user's very first message they receive FIRST_MESSAGE_LETTERS random
+ *   letters as a one-time starter pack. After that, letters are only obtained
+ *   through the shop.
  */
 
 const { db, stmts, requireUser } = require('../db/database');
 const {
   LOCK_DURATION_SEC,
   ROLL_COST,
+  ROLL_COST_SCALE,
   ROLL_COUNT,
   TIER1_COINS,
-  TIER1_LETTERS,
+  FIRST_MESSAGE_LETTERS,
   TIER3_PENALTY,
-  SELL_BASE_PRICE,
-  SELL_COMMISSION_RATE,
+  MAX_LETTER_LEVEL,
+  SYMBOL_CHARS,
 } = require('../config');
+
+/**
+ * Compute the actual roll cost for a player given their current inventory.
+ * cost = ROLL_COST + ROLL_COST_SCALE × Σ(inventory values)
+ */
+function computeRollCost(inventory) {
+  const totalLevels = Object.values(inventory || {}).reduce((s, v) => s + v, 0);
+  return ROLL_COST + ROLL_COST_SCALE * totalLevels;
+}
 
 const ALPHABET = 'abcdefghijklmnopqrstuvwxyzñ';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * Count the occurrence of each a-z character in `text`.
+ * Returns true if `key` is a valid inventory key:
+ * a single a–z/ñ letter or one of the two group keys _numbers / _symbols.
+ */
+function isValidInventoryKey(key) {
+  if (!key) return false;
+  return (key >= 'a' && key <= 'z') || key === 'ñ'
+    || key === '_numbers' || key === '_symbols';
+}
+
+/**
+ * Count the occurrence of each inventory-relevant character in `text`.
+ * Letters (a-z, ñ) are counted individually.
+ * Digits (0-9) are summed into the `_numbers` group key.
+ * Symbols (SYMBOL_CHARS) are summed into the `_symbols` group key.
  * @param {string} text
- * @returns {Object.<string, number>}  e.g. { a:1, p:2, l:1, e:1 }
+ * @returns {Object.<string, number>}  e.g. { a:1, p:2, _numbers:1, _symbols:2 }
  */
 function letterRequirements(text) {
   const req = {};
-  for (const ch of text.toLowerCase()) {
-    if ((ch >= 'a' && ch <= 'z') || ch === 'ñ') {
-      req[ch] = (req[ch] || 0) + 1;
+  for (const ch of text) {
+    const lc = ch.toLowerCase();
+    if ((lc >= 'a' && lc <= 'z') || lc === 'ñ') {
+      req[lc] = (req[lc] || 0) + 1;
+    } else if (ch >= '0' && ch <= '9') {
+      req._numbers = (req._numbers || 0) + 1;
+    } else if (SYMBOL_CHARS.includes(ch)) {
+      req._symbols = (req._symbols || 0) + 1;
     }
   }
   return req;
@@ -52,9 +85,11 @@ function letterRequirements(text) {
  * Pick `n` random letters weighted toward common English letters
  * so early-game rewards feel useful.
  */
-const WEIGHTED_POOL = (
-  'eeeeeeettttttaaaaooooiiiinnnnsssrrrhhhhddddllllccuuummmffppggwwybbvvkjxqzññ'
-).split('');
+const WEIGHTED_POOL = [
+  ...('eeeeeeettttttaaaaooooiiiinnnnsssrrrhhhhddddllllccuuummmffppggwwybbvvkjxqzññ').split(''),
+  '_numbers', '_numbers', '_numbers',
+  '_symbols', '_symbols',
+];
 
 function randomLetters(n) {
   const result = [];
@@ -106,6 +141,9 @@ function processMessage(userId, text) {
   const inventory = JSON.parse(user.inventory_json || '{}');
   const nowSec = Math.floor(Date.now() / 1000);
 
+  // ── Step 1b: First-message check ──────────────────────────────────────────
+  const isFirstMessage = stmts.getUserMessageCount.get(userId).cnt === 0;
+
   // ── Step 2: Letter requirements ───────────────────────────────────────────
   const req = letterRequirements(text);
 
@@ -139,7 +177,7 @@ function processMessage(userId, text) {
     // ── Tier 1 – different user ──────────────────────────────────────────
     tier        = 1;
     coinDelta   = TIER1_COINS;
-    newLetters  = randomLetters(TIER1_LETTERS);
+    newLetters  = [];
     lockedLetter = null;
     newStreak   = 1;
   } else {
@@ -160,12 +198,17 @@ function processMessage(userId, text) {
     }
   }
 
+  // ── First-message bonus: one-time starter pack of letters ─────────────────
+  if (isFirstMessage) {
+    newLetters = randomLetters(FIRST_MESSAGE_LETTERS);
+  }
+
   // ── Step 6: Apply everything inside one transaction ───────────────────────
   const result = db.transaction(() => {
-    // Build updated inventory: increment unlock levels for new letters
+    // Build updated inventory: increment unlock levels for new letters (capped at MAX_LETTER_LEVEL)
     const updatedInventory = { ...inventory };
     for (const letter of newLetters) {
-      updatedInventory[letter] = (updatedInventory[letter] || 0) + 1;
+      updatedInventory[letter] = Math.min((updatedInventory[letter] || 0) + 1, MAX_LETTER_LEVEL);
     }
 
     // Persist user state
@@ -221,22 +264,23 @@ function processMessage(userId, text) {
  * @returns {{ newLetters: string[], newCoins: number, newInventory: object }}
  */
 function shopRoll(userId) {
-  const user = requireUser(userId);
+  const user      = requireUser(userId);
+  const inventory = JSON.parse(user.inventory_json || '{}');
+  const rollCost  = computeRollCost(inventory);
 
-  if (user.coins < ROLL_COST) {
-    throw new Error(`Monedas insuficientes. Una tirada cuesta ${ROLL_COST} monedas.`);
+  if (user.coins < rollCost) {
+    throw new Error(`Monedas insuficientes. La tirada cuesta ${rollCost} 🪙 con tu inventario actual.`);
   }
 
-  const newLetters   = randomLetters(ROLL_COUNT);
-  const inventory    = JSON.parse(user.inventory_json || '{}');
+  const newLetters = randomLetters(ROLL_COUNT);
 
   const updatedInventory = { ...inventory };
   for (const letter of newLetters) {
-    updatedInventory[letter] = (updatedInventory[letter] || 0) + 1;
+    updatedInventory[letter] = Math.min((updatedInventory[letter] || 0) + 1, MAX_LETTER_LEVEL);
   }
 
   db.transaction(() => {
-    stmts.updateCoins.run(-ROLL_COST, userId);
+    stmts.updateCoins.run(-rollCost, userId);
     stmts.updateInventory.run(JSON.stringify(updatedInventory), userId);
   })();
 
@@ -246,64 +290,8 @@ function shopRoll(userId) {
     newLetters,
     newCoins:     fresh.coins,
     newInventory: updatedInventory,
+    rollCost,
   };
 }
 
-// ── Market: Sell a letter level (normal market) ────────────────────────────────
-
-/**
- * Sell one level of a letter on the normal market (instant, tax deducted).
- * For black-market sales use engine/blackMarket.js (listing / heat system).
- *
- * Earned = floor(SELL_BASE_PRICE × (1 − SELL_COMMISSION_RATE))
- *
- * @param {number} userId
- * @param {string} letter  – single lowercase letter
- * @returns {{ letter, earned, newCoins, newInventory }}
- * @throws {Error} with a user-facing message on validation failure
- */
-function sellLetter(userId, letter) {
-  if (!letter || letter.length !== 1) {
-    throw new Error('Letra inválida para vender.');
-  }
-  const normalizedLetter = letter.toLowerCase();
-  if (!((normalizedLetter >= 'a' && normalizedLetter <= 'z') || normalizedLetter === 'ñ')) {
-    throw new Error('Letra inválida para vender.');
-  }
-
-  const user      = requireUser(userId);
-  const inventory = JSON.parse(user.inventory_json || '{}');
-  const level     = inventory[normalizedLetter] || 0;
-
-  if (level < 1) {
-    throw new Error(
-      `No tienes niveles de "${normalizedLetter.toUpperCase()}" para vender.`
-    );
-  }
-
-  const earned   = Math.floor(SELL_BASE_PRICE * (1 - SELL_COMMISSION_RATE));
-  const netDelta = earned;
-
-  const result = db.transaction(() => {
-    const updatedInventory = { ...inventory };
-    updatedInventory[normalizedLetter] = level - 1;
-    if (updatedInventory[normalizedLetter] === 0) {
-      delete updatedInventory[normalizedLetter];
-    }
-
-    stmts.updateCoins.run(netDelta, userId);
-    stmts.updateInventory.run(JSON.stringify(updatedInventory), userId);
-
-    const fresh = stmts.getUser.get(userId);
-    return {
-      letter:       normalizedLetter,
-      earned,
-      newCoins:     fresh.coins,
-      newInventory: updatedInventory,
-    };
-  })();
-
-  return result;
-}
-
-module.exports = { processMessage, shopRoll, sellLetter, letterRequirements, ROLL_COST, ROLL_COUNT };
+module.exports = { processMessage, shopRoll, computeRollCost, letterRequirements, ROLL_COST, ROLL_COST_SCALE, ROLL_COUNT };

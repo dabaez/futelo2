@@ -12,13 +12,15 @@
 module.exports = {
   // ── Starting economy ───────────────────────────────────────────────────────
   /** Coins every new user starts with. */
-  STARTING_COINS: 100,
+  STARTING_COINS: 0,
+  /** Starting letter inventory (JSON string). Contains only the letters for "HOLA". */
+  STARTING_INVENTORY: JSON.stringify({ a: 1, h: 1, l: 1, o: 1 }),
+  /** Number of random letters granted after a user's first ever message. One-time bonus. */
+  FIRST_MESSAGE_LETTERS: 26,
 
   // ── Anti-spam coin tiers ────────────────────────────────────────────────────
   /** Coins awarded when a different user spoke last (Tier 1). */
   TIER1_COINS: 10,
-  /** Number of random letters awarded on a Tier-1 message. */
-  TIER1_LETTERS: 2,
   // Tier 2: same user, streak == 2 → 0 coins, 0 letters (warning only)
   /** Coins deducted when the same user sends 3+ consecutive messages (Tier 3). */
   TIER3_PENALTY: 50,
@@ -26,54 +28,56 @@ module.exports = {
   LOCK_DURATION_SEC: 5 * 60,        // 5 minutes
 
   // ── Letter shop (roll) ──────────────────────────────────────────────────────
-  /** Coin cost of a letter roll in the shop. */
+  /** Base coin cost of a letter roll (before scaling). */
   ROLL_COST: 50,
+  /**
+   * Extra coins added to the roll cost per total letter level the player owns.
+   * cost = ROLL_COST + ROLL_COST_SCALE × sum(inventory values)
+   * Makes rolling progressively more expensive as players near the cap.
+   */
+  ROLL_COST_SCALE: 2,
   /** Number of random letters unlocked per roll. */
   ROLL_COUNT: 3,
+  /** Maximum unlock level any single letter can reach in a player's inventory. */
+  MAX_LETTER_LEVEL: 6,
+  /**
+   * Characters treated as symbols for the shared _symbols inventory group.
+   * Must match the SYMBOL_CHARS constant in RestrictedKeyboard.jsx.
+   */
+  SYMBOL_CHARS: '!?.,:-()@#&*',
 
   // ── Prompt feature ──────────────────────────────────────────────────────────
   /** How long (seconds) a prompt stays open for replies and votes. */
-  PROMPT_DURATION_SEC: 3 * 60,      // 3 minutes
+  PROMPT_DURATION_SEC: 60 * 60,      // 1 hour
   /** Coins awarded to the reply with the most votes. */
   PROMPT_WINNER_BONUS: 100,
   /** Coins awarded to the second-place reply (different user). */
   PROMPT_RUNNER_UP_BONUS: 30,
+  /** Coins awarded to any player just for submitting a reply to a prompt. */
+  PROMPT_REPLY_BONUS: 10,
   /** Coin cost for a player to manually fire a prompt from the shop. */
-  PROMPT_BUY_COST: 200,
+  PROMPT_BUY_COST: 50,
   /** Chat silence (seconds) before the auto-scheduler fires a prompt. */
   INACTIVITY_SEC: 24 * 60 * 60,     // 24 hours
 
-  // ── Letter market (sell) ────────────────────────────────────────────────────
-  /** Base coins earned when selling one level of a letter. */
+  // ── P2P letter market ───────────────────────────────────────────────────────
+  /** Default suggested listing price when a player puts a letter up for sale. */
   SELL_BASE_PRICE: 15,
-  /** Fraction of the base price taken as tax on the normal market (0–1). */
-  SELL_COMMISSION_RATE: 0.20,
+  /** Maximum price a seller can set for a listing. */
+  MARKET_MAX_PRICE: 500,
 
-  // ── Black market heat system ─────────────────────────────────────────────
-  /** Coin fine applied when a black-market listing is caught. */
-  BLACK_MARKET_FINE: 40,
-  /**
-   * Base catch probability **per minute** per active listing at zero heat.
-   * Formula: prob = min(BASE * (1 + heat * 15), MAX)
-   *   heat=0.0 → 4 %   heat=0.3 → 22 %   heat=1.0 → 64 %
-   */
-  BLACK_MARKET_BASE_PROB: 0.04,
-  /** Hard ceiling on the per-minute catch probability. */
-  BLACK_MARKET_MAX_PROB: 0.80,
-  /** Heat boost applied globally whenever any listing is caught. */
-  HEAT_CATCH_INCREMENT: 0.20,
-  /** Heat boost applied whenever "mercado negro" is mentioned in chat. */
-  HEAT_MENTION_INCREMENT: 0.08,
-  /**
-   * Fraction heat is multiplied by each minute with no catches (cooling).
-   * 0.90 → 10 % decay / min; after ~20 min with no catches heat ≈ 0.
-   */
-  HEAT_DECAY_RATE: 0.90,
-  /** Absolute maximum heat value (clamp). */
-  HEAT_MAX: 1.0,
-  /** Seconds before an uncollected listing automatically expires (letter returned). */
-  BLACK_MARKET_LISTING_SEC: 10 * 60,  // 10 minutes
-
+  // ── Beg system ─────────────────────────────────────────────────────────────
+  /** Coins transferred when a player gives to a beggar. */
+  BEG_GIFT_AMOUNT: 10,
+  /** Minimum seconds between two beg requests from the same user. */
+  BEG_COOLDOWN_SEC: 60,
+  // ── Letter lottery ──────────────────────────────────────────────────────────
+  /** Coins paid to start a lottery round (added to the jackpot). */
+  LOTTERY_START_COST: 200,
+  /** Fixed bet amount per player per round. */
+  LOTTERY_BET_AMOUNT: 50,
+  /** How long (seconds) a lottery round stays open for bets. */
+  LOTTERY_DURATION_SEC: 5 * 60,   // 5 minutes
   // ── Prompt question pool ────────────────────────────────────────────────────
   /**
    * The pool of questions the auto-scheduler (and pickNextPrompt) draws from.
