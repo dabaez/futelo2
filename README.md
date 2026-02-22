@@ -93,6 +93,7 @@ Requires:
 | Lanzar un prompt | configurable 🪙 | Inicia un prompt comunitario inmediatamente |
 | Vender letra (mercado normal) | — | Lista la letra; comprador paga; 20% comisión |
 | Vender letra (mercado negro) | — | Sin comisión, pero con riesgo de multa |
+| Pico (minas) | 30 🪙 | Obtén 10 golpes para usar en las minas |
 
 #### Cajas — Rareza del resultado
 
@@ -137,6 +138,16 @@ Un mini-juego de apuestas periódico:
 - Los acertantes reciben +2 niveles de la letra ganada más monedas del bote.
 - Si nadie acierta, las letras se convierten en monedas y el bote se acumula.
 - Al cerrarse, se publica un **mensaje del sistema** en el feed con el resultado.
+
+### Minas de Letras
+
+Un mini-juego de exploración individual:
+
+- Compra un pico en la tienda por 30 🪙 (otorga 10 golpes).
+- Toca la roca en la pestaña ⛏️ Minas para gastar un golpe.
+- Cada golpe tiene un 40% de probabilidad de encontrar una letra aleatoria (+1 nivel en el inventario, máx. 6).
+- Los picos se acumulan — puedes comprar varios seguidos.
+- Es una actividad en solitario; no se emiten eventos a otros jugadores.
 
 ### System Messages
 

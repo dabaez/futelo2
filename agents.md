@@ -39,7 +39,8 @@ futelo/
 │   │   │   ├── market.js          P2P marketplace engine (factory pattern; powers BOTH markets)
 │   │   │   ├── promptEngine.js    Community prompt lifecycle
 │   │   │   ├── lottery.js         Letter-gambling round engine
-│   │   │   └── blackMarket.js     Black market heat / catch mechanic
+│   │   │   ├── blackMarket.js     Black market heat / catch mechanic
+│   │   │   └── mining.js          Pickaxe / letter-mine engine
 │   │   └── bot/
 │   │       ├── bot.js             grammY bot (gatekeeper + mirror)
 │   │       └── auth.js            Telegram initData HMAC validator
@@ -57,7 +58,7 @@ futelo/
 │   │   │   ├── MessageBubble.jsx  Single chat bubble (own/other + tier badge + system pill)
 │   │   │   ├── PromptBanner.jsx   Collapsible prompt panel (timer, replies, votes)
 │   │   │   ├── RestrictedKeyboard.jsx  Custom 4-row keyboard with inventory limits
-│   │   │   ├── ShopModal.jsx      Lootbox roll + P2P market + prompt bottom-sheet
+│   │   │   ├── ShopModal.jsx      Lootbox roll + P2P market + prompt + mines (5 tabs)
 │   │   │   ├── BlackMarketModal.jsx  Secret P2P market (dark-themed, triple-tap access)
 │   │   │   ├── LotteryModal.jsx   Letter-gambling round modal
 │   │   │   └── DevUserPicker.jsx  Dev-only user picker (no Telegram needed)
@@ -146,6 +147,11 @@ module.exports = {
   GAMBLING_WIN_LETTERS:       2,
   GAMBLING_ERRORS:            [ /* 10 Spanish humorous error messages */ ],
 
+  // ── Letter mines ──
+  PICKAXE_COST:     30,   // coins to buy one pickaxe
+  PICKAXE_HITS:     10,   // swings granted per purchase
+  MINE_HIT_CHANCE:  0.4,  // probability a single swing finds a letter
+
   PROMPT_POOL: [ /* 20 Spanish questions */ ],
 };
 ```
@@ -167,13 +173,13 @@ picks up the new values on next page load via `GET /api/config`.
 - WAL mode + `synchronous = NORMAL` — safe and fast on the 1 GB droplet.
 - DB file lives at `../../data/futelo.db` relative to `database.js`
   (i.e. `futelo/data/futelo.db`). The `data/` directory is created on first run.
-- **Current schema version: 6** (migrations v1–v6 applied automatically on startup).
+- **Current schema version: 7** (migrations v1–v7 applied automatically on startup).
 
 #### Tables
 
 | Table | Purpose |
 |---|---|
-| `users` | One row per Telegram user. `inventory_json` is a JSON string `{"a":3,"b":1,...}`. Special row: `id=0` (`username='sistema'`) for system messages. |
+| `users` | One row per Telegram user. `inventory_json` is a JSON string `{"a":3,"b":1,...}`. `pickaxe_hits` integer counter (migration v7). Special row: `id=0` (`username='sistema'`) for system messages. |
 | `game_state` | Key/value. Holds `last_sender_id` and BM heat state. |
 | `messages` | Persisted chat log used to hydrate the feed on load. `user_id=0` rows are system messages (pill UI). |
 | `letter_locks` | Active Tier-3 penalties per user. `locked_until` is a Unix timestamp. |
@@ -216,6 +222,13 @@ Black market prepared statements (mirror set, separate table):
 | `getOpenBmListings` | Returns all open BM listings with seller names. |
 | `resolveBmListing` | Resolves a BM listing (sold / cancelled). |
 | `getUserBmListings` | Returns a user's 20 most recent BM listings. |
+
+Mining prepared statements (in `stmts`):
+
+| Statement | What it does |
+|---|---|
+| `addPickaxeHits` | `UPDATE users SET pickaxe_hits = MIN(pickaxe_hits + ?, 9999) WHERE id = ?` |
+| `usePickaxeHit` | `UPDATE users SET pickaxe_hits = MAX(0, pickaxe_hits - 1) WHERE id = ?` |
 
 Notification statements (in `stmts`):
 
@@ -260,6 +273,21 @@ Exported:
   Returns `{ newLetters, rarity, newCoins, newInventory, rollCost }`.
 - `letterRequirements(text)` — pure helper, returns `{a:1, p:2, _numbers:1, _symbols:2, ...}`.
   Digits (0-9) are summed into `_numbers`; characters in `SYMBOL_CHARS` are summed into `_symbols`.
+
+### Mining Engine (`backend/src/engine/mining.js`)
+
+Manages the pickaxe / letter-mine mini-game. All constants come from `config.js`.
+
+- `buyPickaxe(userId)` — deducts `PICKAXE_COST` coins, adds `PICKAXE_HITS` to the user's
+  `pickaxe_hits` counter. Multiple purchases stack. Returns `{ newCoins, pickaxeHits }`.
+- `swing(userId)` — requires `pickaxe_hits > 0`. Decrements the counter by 1, then rolls
+  `Math.random() < MINE_HIT_CHANCE` for a find. On a hit, picks a random letter from
+  `'abcdefghijklmnopqrstuvwxyzñ'` and grants +1 inventory level (capped at `MAX_LETTER_LEVEL`).
+  Returns `{ found, letter, newInventory, hitsLeft }` — `letter` and `newInventory` are `null`
+  on a miss.
+
+Both functions throw a user-facing `Error` on validation failure. All DB writes are wrapped
+in `db.transaction()`. Mining is a solo activity — no socket broadcast to other clients.
 
 ### P2P Market Engine (`backend/src/engine/market.js`)
 
@@ -385,6 +413,8 @@ All endpoints are defined in `server.js`.
 | POST | `/api/lottery/start` | initData header | Start a lottery round (costs `LOTTERY_START_COST` coins) |
 | POST | `/api/lottery/bet` | initData header | Place a bet `{ roundId, letter }` |
 | GET | `/api/lottery/active` | none | Active round + bets (or `{ round: null }`) |
+| POST | `/api/mine/buy` | initData header | Buy a pickaxe — deduct `PICKAXE_COST`, add `PICKAXE_HITS` swings |
+| POST | `/api/mine/swing` | initData header | Swing once — 40% chance to find a random letter |
 
 Auth is sent as the `x-init-data` HTTP header **or** `body.initData`.
 
@@ -428,7 +458,7 @@ Auth is sent as the `x-init-data` HTTP header **or** `body.initData`.
 
 | Event | Payload |
 |---|---|
-| `user_update` | `{ newCoins, newInventory, newLetters, lockedLetter, tier, coinDelta }` |
+| `user_update` | `{ newCoins, newInventory, newLetters, lockedLetter, tier, coinDelta, pickaxeHits }` |
 | `rejected_message` | `{ reason }` |
 | `prompt_error` | `{ reason }` |
 | `bm_caught` | `{ letter, fine, listingId }` |
@@ -462,12 +492,12 @@ window.Telegram.WebApp.disableVerticalSwipes?.();
 ```
 App.jsx
  ├── initData (useState)          ← null → DevUserPicker; set → chat
- ├── useAuth(initData)            ← user profile, coins, inventory, locks
+ ├── useAuth(initData)            ← user profile, coins, inventory, locks, pickaxeHits
  ├── useSocket(initData)          ← socket, connected, sendMessage()
  ├── ChatFeed                     ← reads socket for new_message events
  ├── PromptBanner                 ← prompt, promptReplies, replyMode, handleVote
  ├── RestrictedKeyboard           ← reads inventory + lockedLetters from user
- ├── ShopModal                    ← lootbox roll + P2P market + prompt
+ ├── ShopModal                    ← lootbox roll + P2P market + prompt + mines
  ├── BlackMarketModal             ← secret P2P market (triple-tap)
  └── LotteryModal                 ← gambling round (auto-opens on new_lottery)
 ```
@@ -490,7 +520,8 @@ Socket events App.jsx handles:
 
 `updateUser(patch)` (from `useAuth`) is the single function for applying
 server-pushed state changes. Call it whenever a socket `user_update` event
-or a shop AJAX response arrives.
+or a shop/mine AJAX response arrives. Handles: `newCoins`, `newInventory`,
+`lockedLetter`, `pickaxeHits`.
 
 ### System Messages in ChatFeed
 
@@ -498,6 +529,20 @@ or a shop AJAX response arrives.
 rounded-pill in `text-tg-hint` colour instead of a normal bubble. System messages
 are persisted in the `messages` table and appear on hydration for all users,
 including those who were offline when the event occurred.
+
+### ShopModal Tabs
+
+`ShopModal` has **5 tabs**: 🎰 Caja (roll), 🛒 Comprar (buy), 💰 Vender (sell),
+📣 Prompts, ⛏️ Minas (mine).
+
+**Minas tab** — two sub-views:
+- **No pickaxe** (`hitsLeft <= 0`): buy panel with info (hits per pickaxe, hit chance %).
+- **Has pickaxe** (`hitsLeft > 0`): rock 🪨 tap interface.
+  - `swingState`: `'idle'` | `'swinging'` | `'miss'` | `'found'`.
+  - `swingResult`: `null` | `{ letter }` — shown as a letter chip on find.
+  - Hits counter displayed; secondary "buy more" button available.
+  - Haptic `impactOccurred('medium')` on a find.
+  - `onPurchase` is called with `{ newInventory }` on find, `{ newCoins }` on pickaxe buy.
 
 ### Lootbox UI (`ShopModal` — Roll Tab)
 
@@ -715,3 +760,5 @@ To simulate two players:
 | Seller misses sale toast when offline | Use `notifyUser()` — not a direct socket emit — so the notification persists until delivered. |
 | System messages missing from feed | Requires `id=0` user row (migration v5). Restart the server to re-run migrations on a fresh DB. |
 | `rollResult` shape changed | `rollResult` in `ShopModal` is `{ letters: string[], rarity: string }` — not a bare `string[]`. Access letters via `rollResult.letters`. |
+| `pickaxeHits` not updating after mine | `ShopModal` maintains its own `hitsLeft` state synced from `initialPickaxeHits` prop via `useEffect`. The prop flows: server response → `onPurchase` → `updateUser` → `App.jsx` state → `pickaxeHits` prop → `ShopModal`. |
+| BM list fires "Compraste" toast | The buy toast in `handleBmPurchase` checks `result.newCoins !== undefined` — list responses omit `newCoins` so no toast fires. Do not add `newCoins` to the list response. |
