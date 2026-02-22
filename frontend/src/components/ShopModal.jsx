@@ -1,459 +1,567 @@
-import React, { useState, useEffect } from 'react';
-
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
+import { useState, useEffect, useCallback } from 'react';
 
 /**
  * ShopModal
  * ─────────
- * Slide-up bottom sheet for rolls, letter selling, and prompt firing.
- *
- * Sell section has two tabs:
- *   🏪 Mercado normal – instant sale, SELL_COMMISSION_RATE tax deducted.
- *   🕵️ Mercado negro  – listing system. Letter is escrowed immediately.
- *       Every minute the server rolls for a catch; probability grows with:
- *         • Global heat (catches + "mercado negro" mentions in chat).
- *         • Time spent listed (more rolls = higher cumulative chance).
- *       User collects coins manually while listing is still pending.
- *       Uncollected listings expire after BLACK_MARKET_LISTING_SEC (letter returned).
+ * Four-tab bottom-sheet:
+ *  🎰 Tirada  – spend coins to roll random letter unlocks
+ *  🛒 Comprar – browse other players' listings and buy letters
+ *  💰 Vender  – list own letters for sale; manage open listings
+ *  📣 Prompt  – fire a community question (costs PROMPT_BUY_COST coins)
  */
+/** Safely parse a fetch Response as JSON; returns null on non-JSON bodies. */
+async function safeJson(res) {
+  const text = await res.text();
+  try { return JSON.parse(text); } catch { return null; }
+}
+
 export default function ShopModal({
-  isOpen, onClose, initData, coins, inventory, onPurchase, onPromptFired, socket,
+  isOpen,
+  onClose,
+  initData,
+  coins,
+  inventory,
+  onPurchase,
+  onPromptFired,
+  socket,
 }) {
-  /* ── Roll ──────────────────────────────────────────────────────────────── */
-  const [rolling,       setRolling]      = useState(false);
-  const [lastRoll,      setLastRoll]     = useState(null);
-  const [rollError,     setRollError]    = useState(null);
+  // ── Tab state ────────────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState('roll');
 
-  /* ── Prompt ────────────────────────────────────────────────────────────── */
-  const [promptBuying,  setPromptBuying]  = useState(false);
-  const [promptSuccess, setPromptSuccess] = useState(false);
-  const [promptError,   setPromptError]   = useState(null);
-
-  /* ── Sell tab ──────────────────────────────────────────────────────────── */
-  const [sellTab, setSellTab] = useState('normal'); // 'normal' | 'black'
-
-  /* ── Normal sell ───────────────────────────────────────────────────────── */
-  const [normalSelling, setNormalSelling] = useState(null);
-  const [normalResult,  setNormalResult]  = useState(null);
-  const [normalError,   setNormalError]   = useState(null);
-
-  /* ── Black market ──────────────────────────────────────────────────────── */
-  const [bmHeat,        setBmHeat]        = useState(0);
-  const [bmCatchProb,   setBmCatchProb]   = useState(0.04);
-  const [bmListings,    setBmListings]    = useState([]);
-  const [bmListing,     setBmListing]     = useState(null);   // letter being listed
-  const [bmListResult,  setBmListResult]  = useState(null);
-  const [bmListError,   setBmListError]   = useState(null);
-  const [bmCollecting,  setBmCollecting]  = useState(null);   // listingId being collected
-  const [, setNow]                        = useState(Date.now()); // countdown re-renders
-
-  /* ── Config ────────────────────────────────────────────────────────────── */
+  // ── Config from server ───────────────────────────────────────────────────
   const [cfg, setCfg] = useState({
-    ROLL_COST: 50, ROLL_COUNT: 3, PROMPT_BUY_COST: 200,
-    SELL_BASE_PRICE: 15, SELL_COMMISSION_RATE: 0.20,
-    BLACK_MARKET_FINE: 40, BLACK_MARKET_BASE_PROB: 0.04,
-    BLACK_MARKET_LISTING_SEC: 600,
+    ROLL_COST: 50, ROLL_COST_SCALE: 2, ROLL_COUNT: 3,
+    SELL_BASE_PRICE: 15, MARKET_MAX_PRICE: 500,
+    PROMPT_BUY_COST: 200, PROMPT_WINNER_BONUS: 100,
+    PROMPT_RUNNER_UP_BONUS: 30, PROMPT_DURATION_SEC: 180,
   });
 
+  // ── Roll tab state ───────────────────────────────────────────────────────
+  const [rolling, setRolling]       = useState(false);
+  const [rollResult, setRollResult] = useState(null);
+  const [rollError, setRollError]   = useState(null);
+
+  // ── Market: buy tab state ────────────────────────────────────────────────
+  const [openListings, setOpenListings]       = useState([]);
+  const [loadingListings, setLoadingListings] = useState(false);
+  const [buying, setBuying]                   = useState(null); // listingId being purchased
+  const [buyError, setBuyError]               = useState(null);
+
+  // ── Market: sell tab state ───────────────────────────────────────────────
+  const [myListings, setMyListings]           = useState([]);
+  const [loadingMine, setLoadingMine]         = useState(false);
+  const [selectedLetter, setSelectedLetter]   = useState(null);
+  const [listingPrice, setListingPrice]       = useState('');
+  const [listing, setListing]                 = useState(false);
+  const [listError, setListError]             = useState(null);
+  const [cancelling, setCancelling]           = useState(null); // listingId
+
+  // ── Prompt tab state ─────────────────────────────────────────────────────
+  const [firingPrompt, setFiringPrompt] = useState(false);
+  const [promptError, setPromptError]   = useState(null);
+
+  // ── Fetch config on mount ────────────────────────────────────────────────
   useEffect(() => {
-    fetch(`${BACKEND_URL}/api/config`)
+    fetch('/api/config')
       .then((r) => r.json())
-      .then((data) => setCfg((prev) => ({ ...prev, ...data })))
+      .then(setCfg)
       .catch(() => {});
   }, []);
 
-  /* ── Fetch heat + listings on open ────────────────────────────────────── */
+  // ── Fetch market data when tab changes or modal opens ───────────────────
   useEffect(() => {
-    if (!isOpen || !initData) return;
-    fetch(`${BACKEND_URL}/api/blackmarket/heat`)
-      .then((r) => r.json())
-      .then((d) => { setBmHeat(d.heat || 0); setBmCatchProb(d.catchProbPerMin || 0.04); })
-      .catch(() => {});
-    fetch(`${BACKEND_URL}/api/blackmarket/listings`, { headers: { 'x-init-data': initData } })
-      .then((r) => r.json())
-      .then((d) => setBmListings(Array.isArray(d) ? d : []))
-      .catch(() => {});
-  }, [isOpen, initData]);
+    if (!isOpen) return;
+    if (activeTab === 'buy') {
+      setLoadingListings(true);
+      setBuyError(null);
+      fetch('/api/market/listings')
+        .then(safeJson)
+        .then((data) => setOpenListings(Array.isArray(data) ? data : []))
+        .catch(() => setBuyError('Error al cargar los listados.'))
+        .finally(() => setLoadingListings(false));
+    }
+    if (activeTab === 'sell') {
+      setLoadingMine(true);
+      fetch('/api/market/my-listings', {
+        headers: initData ? { 'x-init-data': initData } : {},
+      })
+        .then(safeJson)
+        .then((data) => setMyListings(Array.isArray(data) ? data : []))
+        .catch(() => {})
+        .finally(() => setLoadingMine(false));
+    }
+  }, [isOpen, activeTab, initData]);
 
-  /* ── Socket listeners (in-modal state sync) ────────────────────────────── */
+  // ── Socket listeners for live market updates ─────────────────────────────
   useEffect(() => {
-    if (!socket || !isOpen) return;
-    const onHeat    = ({ heat, catchProbPerMin }) => { setBmHeat(heat); setBmCatchProb(catchProbPerMin); };
-    const onCaught  = ({ listingId }) => setBmListings((p) => p.map((l) => l.id === listingId ? { ...l, status: 'caught'  } : l));
-    const onExpired = ({ listingId }) => setBmListings((p) => p.map((l) => l.id === listingId ? { ...l, status: 'expired' } : l));
-    socket.on('bm_heat_update', onHeat);
-    socket.on('bm_caught',      onCaught);
-    socket.on('bm_expired',     onExpired);
-    return () => {
-      socket.off('bm_heat_update', onHeat);
-      socket.off('bm_caught',      onCaught);
-      socket.off('bm_expired',     onExpired);
+    if (!socket) return;
+
+    const onNewListing = (newListing) => {
+      setOpenListings((prev) => {
+        if (prev.some((l) => l.id === newListing.id)) return prev;
+        return [...prev, newListing];
+      });
     };
-  }, [socket, isOpen]);
+    const onSold = ({ listingId }) => {
+      setOpenListings((prev) => prev.filter((l) => l.id !== listingId));
+      setMyListings((prev) =>
+        prev.map((l) => l.id === listingId ? { ...l, status: 'sold' } : l)
+      );
+    };
+    const onCancelled = ({ listingId }) => {
+      setOpenListings((prev) => prev.filter((l) => l.id !== listingId));
+      setMyListings((prev) =>
+        prev.map((l) => l.id === listingId ? { ...l, status: 'cancelled' } : l)
+      );
+    };
 
-  /* ── Countdown ticker for black market listing times ───────────────────── */
+    socket.on('new_market_listing',      onNewListing);
+    socket.on('market_listing_sold',      onSold);
+    socket.on('market_listing_cancelled', onCancelled);
+
+    return () => {
+      socket.off('new_market_listing',      onNewListing);
+      socket.off('market_listing_sold',      onSold);
+      socket.off('market_listing_cancelled', onCancelled);
+    };
+  }, [socket]);
+
+  // ── Reset on close ───────────────────────────────────────────────────────
   useEffect(() => {
-    if (!isOpen || sellTab !== 'black') return;
-    const id = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(id);
-  }, [isOpen, sellTab]);
+    if (!isOpen) {
+      setRollResult(null);
+      setRollError(null);
+      setBuyError(null);
+      setListError(null);
+      setSelectedLetter(null);
+      setListingPrice('');
+      setPromptError(null);
+    }
+  }, [isOpen]);
+
+  // ── Derived: dynamic roll cost (base + scale × total levels owned) ──────
+  const totalLevels = Object.values(inventory || {}).reduce((s, v) => s + v, 0);
+  const rollCost = cfg.ROLL_COST + (cfg.ROLL_COST_SCALE || 0) * totalLevels;
+
+  // ── Roll action ──────────────────────────────────────────────────────────
+  const handleRoll = useCallback(async () => {
+    if (rolling || coins < rollCost) return;
+    setRolling(true);
+    setRollResult(null);
+    setRollError(null);
+    try {
+      const r = await fetch('/api/shop/roll', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-init-data': initData || '' },
+      });
+      const data = await safeJson(r);
+      if (!r.ok) throw new Error(data?.error || 'Error en la tienda.');
+      setRollResult(data.newLetters);
+      onPurchase?.(data);
+    } catch (e) {
+      setRollError(e.message);
+    } finally {
+      setRolling(false);
+    }
+  }, [rolling, coins, rollCost, initData, onPurchase]);
+
+  // ── Buy listing action ───────────────────────────────────────────────────
+  const handleBuyListing = useCallback(async (listingId) => {
+    if (buying) return;
+    setBuying(listingId);
+    setBuyError(null);
+    try {
+      const r = await fetch(`/api/market/buy/${listingId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-init-data': initData || '' },
+      });
+      const data = await safeJson(r);
+      if (!r.ok) throw new Error(data?.error || 'Error al comprar.');
+      // user_update socket event will update coins + inventory via App.jsx
+    } catch (e) {
+      setBuyError(e.message);
+    } finally {
+      setBuying(null);
+    }
+  }, [buying, initData]);
+
+  // ── List letter action ───────────────────────────────────────────────────
+  const handleListLetter = useCallback(async () => {
+    if (!selectedLetter || listing) return;
+    const price = parseInt(listingPrice, 10);
+    if (!price || price < 1 || price > cfg.MARKET_MAX_PRICE) {
+      setListError(`El precio debe ser entre 1 y ${cfg.MARKET_MAX_PRICE}.`);
+      return;
+    }
+    setListing(true);
+    setListError(null);
+    try {
+      const r = await fetch('/api/market/list', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-init-data': initData || '' },
+        body: JSON.stringify({ letter: selectedLetter, price }),
+      });
+      const data = await safeJson(r);
+      if (!r.ok) throw new Error(data?.error || 'Error al listar.');
+      // Refresh my listings to show the new entry
+      const res2 = await fetch('/api/market/my-listings', {
+        headers: initData ? { 'x-init-data': initData } : {},
+      });
+      const mine = await safeJson(res2);
+      setMyListings(Array.isArray(mine) ? mine : []);
+      setSelectedLetter(null);
+      setListingPrice('');
+    } catch (e) {
+      setListError(e.message);
+    } finally {
+      setListing(false);
+    }
+  }, [selectedLetter, listing, listingPrice, cfg.MARKET_MAX_PRICE, initData]);
+
+  // ── Cancel listing action ────────────────────────────────────────────────
+  const handleCancelListing = useCallback(async (listingId) => {
+    if (cancelling) return;
+    setCancelling(listingId);
+    try {
+      const r = await fetch(`/api/market/cancel/${listingId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-init-data': initData || '' },
+      });
+      const data = await safeJson(r);
+      if (!r.ok) throw new Error(data?.error || 'Error al cancelar.');
+      setMyListings((prev) =>
+        prev.map((l) => l.id === listingId ? { ...l, status: 'cancelled' } : l)
+      );
+    } catch (e) {
+      // Socket event will sync state
+    } finally {
+      setCancelling(null);
+    }
+  }, [cancelling, initData]);
+
+  // ── Buy prompt action ────────────────────────────────────────────────────
+  const handleBuyPrompt = useCallback(async () => {
+    if (firingPrompt || coins < cfg.PROMPT_BUY_COST) return;
+    setFiringPrompt(true);
+    setPromptError(null);
+    try {
+      const r = await fetch('/api/shop/prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-init-data': initData || '' },
+      });
+      const data = await safeJson(r);
+      if (!r.ok) throw new Error(data?.error || 'Error al lanzar el prompt.');
+      onPromptFired?.(data);
+      onClose();
+    } catch (e) {
+      setPromptError(e.message);
+    } finally {
+      setFiringPrompt(false);
+    }
+  }, [firingPrompt, coins, cfg.PROMPT_BUY_COST, initData, onPromptFired, onClose]);
+
+  // ── Derived: inventory keys + labels ────────────────────────────────────
+  const isBroke  = coins < rollCost && totalLevels === 0;
+
+  const inventoryEntries = Object.entries(inventory || {})
+    .filter(([, v]) => v > 0)
+    .sort(([a], [b]) => {
+      if (a.startsWith('_') && !b.startsWith('_')) return 1;
+      if (!a.startsWith('_') && b.startsWith('_')) return -1;
+      return a.localeCompare(b);
+    });
+
+  const letterLabel = (key) => {
+    if (key === '_numbers') return '0-9';
+    if (key === '_symbols') return '!?…';
+    return key.toUpperCase();
+  };
+
+  const openMyListings = myListings.filter((l) => l.status === 'open');
 
   if (!isOpen) return null;
 
-  /* ── Derived values ────────────────────────────────────────────────────── */
-  const invEntries    = Object.entries(inventory || {}).sort(([a], [b]) => a.localeCompare(b));
-  const canAfford     = coins >= cfg.ROLL_COST;
-  const canAffordPmt  = coins >= cfg.PROMPT_BUY_COST;
-  const normalEarned  = Math.floor(cfg.SELL_BASE_PRICE * (1 - cfg.SELL_COMMISSION_RATE));
-  const pendingBm     = bmListings.filter((l) => l.status === 'pending');
-  const recentBm      = bmListings.filter((l) => l.status !== 'pending').slice(0, 5);
-  const listedSet     = new Set(pendingBm.map((l) => l.letter));
-  const listableEntries = invEntries.filter(([l]) => !listedSet.has(l));
-  const nowSec        = Math.floor(Date.now() / 1000);
-  const heatPct       = Math.min(bmHeat, 1);
-  const heatColor     = heatPct < 0.2 ? 'bg-green-500' : heatPct < 0.5 ? 'bg-amber-500' : 'bg-red-500';
-  const heatTextColor = heatPct < 0.2 ? 'text-green-600' : heatPct < 0.5 ? 'text-amber-500' : 'text-red-500';
-  const heatLabel     = heatPct < 0.2 ? 'Baja' : heatPct < 0.5 ? 'Media' : 'Alta';
+  // ── Tabs config ──────────────────────────────────────────────────────────
+  const tabs = [
+    { id: 'roll',   label: '🎰' },
+    { id: 'buy',    label: '🛒' },
+    { id: 'sell',   label: '💰' },
+    { id: 'prompt', label: '📣' },
+  ];
 
-  const fmtAgo = (listed_at) => {
-    const mins = Math.floor((nowSec - listed_at) / 60);
-    return mins < 1 ? 'hace <1 min' : `hace ${mins} min`;
-  };
-  const fmtExpiry = (listed_at) => {
-    const rem = cfg.BLACK_MARKET_LISTING_SEC - (nowSec - listed_at);
-    if (rem <= 0) return 'expirando…';
-    return `${Math.ceil(rem / 60)} min restantes`;
-  };
-
-  /* ── Actions ───────────────────────────────────────────────────────────── */
-  async function handleRoll() {
-    setRolling(true); setRollError(null); setLastRoll(null);
-    try {
-      const res  = await fetch(`${BACKEND_URL}/api/shop/roll`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-init-data': initData },
-        body: JSON.stringify({ initData }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      setLastRoll(data.newLetters);
-      onPurchase(data);
-    } catch (e) { setRollError(e.message); }
-    finally { setRolling(false); }
-  }
-
-  async function handleNormalSell(letter) {
-    setNormalSelling(letter); setNormalError(null); setNormalResult(null);
-    try {
-      const res  = await fetch(`${BACKEND_URL}/api/shop/sell`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-init-data': initData },
-        body: JSON.stringify({ letter }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      setNormalResult(data);
-      onPurchase(data);
-    } catch (e) { setNormalError(e.message); }
-    finally { setNormalSelling(null); }
-  }
-
-  async function handleListLetter(letter) {
-    setBmListing(letter); setBmListError(null); setBmListResult(null);
-    try {
-      const res  = await fetch(`${BACKEND_URL}/api/blackmarket/list`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-init-data': initData },
-        body: JSON.stringify({ letter }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      setBmListings((prev) => [
-        { id: data.listingId, letter: data.letter, listed_at: data.listedAt, status: 'pending', coins_delta: 0 },
-        ...prev,
-      ]);
-      setBmHeat(data.heat);
-      setBmCatchProb(data.catchProbPerMin);
-      setBmListResult(data.letter);
-      onPurchase({ newInventory: data.newInventory });
-    } catch (e) { setBmListError(e.message); }
-    finally { setBmListing(null); }
-  }
-
-  async function handleCollect(listingId) {
-    setBmCollecting(listingId); setBmListError(null);
-    try {
-      const res  = await fetch(`${BACKEND_URL}/api/blackmarket/collect/${listingId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-init-data': initData },
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      setBmListings((prev) => prev.map((l) =>
-        l.id === listingId ? { ...l, status: 'collected', coins_delta: data.earned } : l
-      ));
-      onPurchase({ newCoins: data.newCoins });
-    } catch (e) { setBmListError(e.message); }
-    finally { setBmCollecting(null); }
-  }
-
-  async function handleBuyPrompt() {
-    setPromptBuying(true); setPromptError(null); setPromptSuccess(false);
-    try {
-      const res  = await fetch(`${BACKEND_URL}/api/shop/prompt`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-init-data': initData },
-        body: JSON.stringify({ initData }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      setPromptSuccess(true);
-      onPromptFired?.(data);
-      setTimeout(onClose, 1200);
-    } catch (e) { setPromptError(e.message); }
-    finally { setPromptBuying(false); }
-  }
-
-  /* ── Render ─────────────────────────────────────────────────────────────── */
   return (
-    <>
+    <div className="fixed inset-0 z-40 flex items-end justify-center">
       {/* Backdrop */}
-      <div className="fixed inset-0 bg-black/40 z-40 animate-fade-in" onClick={onClose} />
+      <div
+        className="absolute inset-0 bg-black/40"
+        onClick={onClose}
+      />
 
       {/* Sheet */}
-      <div className="fixed bottom-0 left-0 right-0 z-50 bg-tg-bg rounded-t-2xl shadow-xl animate-slide-up overflow-y-auto max-h-[90vh]">
-        {/* Handle */}
-        <div className="flex justify-center pt-2 pb-1">
-          <div className="w-10 h-1 rounded-full bg-gray-300" />
+      <div className="relative z-50 w-full max-w-lg bg-tg-bg rounded-t-2xl shadow-2xl flex flex-col max-h-[85vh]">
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 pt-4 pb-2 border-b border-tg-bg-sec shrink-0">
+          <h2 className="font-bold text-tg-text text-base">Tienda</h2>
+          <button
+            onClick={onClose}
+            className="text-tg-hint text-xl leading-none active:opacity-60"
+          >
+            ✕
+          </button>
         </div>
 
-        <div className="px-4 pb-8">
-
-          {/* Header */}
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-bold text-tg-text">Tienda de letras 🛒</h2>
-            <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full bg-tg-bg-sec text-tg-hint text-lg">×</button>
-          </div>
-
-          {/* Coin balance */}
-          <div className="bg-tg-bg-sec rounded-xl px-4 py-3 mb-4 flex items-center justify-between">
-            <span className="text-tg-hint text-sm">Tu saldo</span>
-            <span className="font-bold text-tg-text text-lg">{coins} 🪙</span>
-          </div>
-
-          {/* ── Roll card ─────────────────────────────────────────────────── */}
-          <div className="border border-tg-bg-sec rounded-xl p-4 mb-4">
-            <div className="flex items-start gap-3 mb-3">
-              <span className="text-3xl">🎰</span>
-              <div>
-                <p className="font-semibold text-tg-text">Tirada de letras</p>
-                <p className="text-sm text-tg-hint">Obtén {cfg.ROLL_COUNT} letras aleatorias y aumenta tu nivel de desbloqueo.</p>
-              </div>
-            </div>
-            {lastRoll && (
-              <div className="flex gap-2 justify-center mb-3">
-                {lastRoll.map((letter, i) => (
-                  <div key={i} className="w-10 h-10 rounded-lg bg-tg-button text-tg-btn-text flex items-center justify-center text-lg font-bold uppercase animate-bounce-once" style={{ animationDelay: `${i * 0.08}s` }}>
-                    {letter}
-                  </div>
-                ))}
-              </div>
-            )}
-            {rollError && <p className="text-red-500 text-sm text-center mb-2">{rollError}</p>}
-            <button onClick={handleRoll} disabled={rolling || !canAfford}
-              className={`w-full py-3 rounded-xl font-semibold text-sm transition-opacity ${canAfford ? 'bg-tg-button text-tg-btn-text active:opacity-80' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
-              {rolling ? 'Tirando…' : !canAfford ? `Necesitas ${cfg.ROLL_COST} monedas` : `Tirar por ${cfg.ROLL_COST} 🪙`}
+        {/* Tab bar */}
+        <div className="flex border-b border-tg-bg-sec shrink-0">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setActiveTab(t.id)}
+              className={`
+                flex-1 py-2.5 text-lg transition-colors
+                ${activeTab === t.id
+                  ? 'border-b-2 border-tg-button text-tg-button'
+                  : 'text-tg-hint'}
+              `}
+            >
+              {t.label}
             </button>
-          </div>
+          ))}
+        </div>
 
-          {/* ── Sell card ─────────────────────────────────────────────────── */}
-          {invEntries.length > 0 && (
-            <div className="border border-tg-bg-sec rounded-xl p-4 mb-4">
-              <div className="flex items-start gap-3 mb-3">
-                <span className="text-3xl">💰</span>
-                <div>
-                  <p className="font-semibold text-tg-text">Vender letras</p>
-                  <p className="text-sm text-tg-hint">Elige cómo cambiar un nivel de letra por monedas.</p>
-                </div>
-              </div>
+        {/* Tab content */}
+        <div className="overflow-y-auto flex-1 p-4">
 
-              {/* Tab toggle */}
-              <div className="flex gap-2 mb-4">
-                <button onClick={() => { setSellTab('normal'); setNormalResult(null); setNormalError(null); }}
-                  className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-colors ${sellTab === 'normal' ? 'bg-tg-button text-tg-btn-text' : 'bg-tg-bg-sec text-tg-hint'}`}>
-                  🏪 Mercado normal
-                </button>
-                <button onClick={() => { setSellTab('black'); setBmListResult(null); setBmListError(null); }}
-                  className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-colors ${sellTab === 'black' ? 'bg-gray-800 text-white' : 'bg-tg-bg-sec text-tg-hint'}`}>
-                  🕵️ Mercado negro
-                </button>
-              </div>
+          {/* ── 🎰 Roll tab ───────────────────────────────────────────── */}
+          {activeTab === 'roll' && (
+            <div className="flex flex-col gap-4">
+              <p className="text-sm text-tg-hint text-center">
+                Desbloquea {cfg.ROLL_COUNT} letras aleatorias por {rollCost} 🪙
+              </p>
 
-              {/* ── Normal tab ──────────────────────────────────────────── */}
-              {sellTab === 'normal' && (
-                <>
-                  <p className="text-xs text-tg-hint mb-3">
-                    Venta inmediata. Recibes <span className="font-semibold text-tg-text">{normalEarned} 🪙</span> por nivel
-                    — <span className="text-amber-500">comisión {Math.round(cfg.SELL_COMMISSION_RATE * 100)}% incluida</span>.
+              {rollResult && (
+                <div className="bg-tg-bg-sec rounded-xl p-3 text-center">
+                  <p className="text-xs text-tg-hint mb-1">¡Obtuviste!</p>
+                  <p className="text-lg font-bold text-tg-text tracking-widest">
+                    {rollResult.map((l) => letterLabel(l)).join('  ')}
                   </p>
-                  <div className="grid grid-cols-7 gap-1 mb-2">
-                    {invEntries.map(([letter, count]) => (
-                      <button key={letter} onClick={() => handleNormalSell(letter)} disabled={normalSelling !== null}
-                        className={`flex flex-col items-center rounded-lg py-1.5 px-1 transition-opacity
-                          ${normalSelling === letter ? 'bg-tg-button text-tg-btn-text opacity-60' : 'bg-tg-bg-sec text-tg-text active:opacity-70'}
-                          ${normalSelling !== null && normalSelling !== letter ? 'opacity-40' : ''}`}>
-                        <span className="text-sm font-bold uppercase">{letter}</span>
-                        <span className={`text-[10px] font-semibold ${normalSelling === letter ? 'text-tg-btn-text' : 'text-tg-button'}`}>{count}</span>
+                </div>
+              )}
+
+              {rollError && (
+                <p className="text-xs text-red-500 text-center">{rollError}</p>
+              )}
+
+              <button
+                onClick={handleRoll}
+                disabled={rolling || coins < rollCost}
+                className="bg-tg-button text-tg-btn-text font-semibold rounded-xl py-3 active:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {rolling ? 'Tirando…' : `Tirar por ${rollCost} 🪙`}
+              </button>
+
+              <p className="text-xs text-tg-hint text-center">
+                Saldo actual: {coins} 🪙
+              </p>
+
+              {isBroke && (
+                <div className="flex flex-col items-center gap-1 pt-2 border-t border-tg-bg-sec">
+                  <p className="text-[11px] text-tg-hint text-center">Sin letras ni monedas suficientes</p>
+                  <button
+                    onClick={() => socket?.emit('beg')}
+                    className="bg-amber-500 text-white font-semibold rounded-xl py-2 px-6 active:opacity-80"
+                  >
+                    🙏 Pedir ayuda
+                  </button>
+                  <p className="text-[10px] text-tg-hint text-center">
+                    Aparece un aviso para que otros jugadores te regalen 10 🪙
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── 🛒 Buy tab ────────────────────────────────────────────── */}
+          {activeTab === 'buy' && (
+            <div className="flex flex-col gap-3">
+              <p className="text-xs text-tg-hint text-center pb-1">
+                Compra letras de otros jugadores con tus monedas.
+              </p>
+
+              {buyError && (
+                <p className="text-xs text-red-500 text-center">{buyError}</p>
+              )}
+
+              {loadingListings && (
+                <p className="text-sm text-tg-hint text-center py-6">Cargando…</p>
+              )}
+
+              {!loadingListings && openListings.length === 0 && (
+                <p className="text-sm text-tg-hint text-center py-6">
+                  No hay letras en venta ahora mismo.
+                </p>
+              )}
+
+              {!loadingListings && openListings.map((l) => (
+                <div
+                  key={l.id}
+                  className="flex items-center justify-between bg-tg-bg-sec rounded-xl px-4 py-3"
+                >
+                  <div>
+                    <span className="text-2xl font-bold text-tg-text mr-2">
+                      {letterLabel(l.letter)}
+                    </span>
+                    <span className="text-xs text-tg-hint">
+                      de {l.seller_first_name || l.seller_username || 'Jugador'}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => handleBuyListing(l.id)}
+                    disabled={buying === l.id || coins < l.price}
+                    className="bg-tg-button text-tg-btn-text text-sm font-semibold rounded-lg px-3 py-1.5 active:opacity-80 disabled:opacity-40"
+                  >
+                    {buying === l.id ? '…' : `${l.price} 🪙`}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ── 💰 Sell tab ───────────────────────────────────────────── */}
+          {activeTab === 'sell' && (
+            <div className="flex flex-col gap-4">
+
+              {/* Active own listings */}
+              {!loadingMine && openMyListings.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <p className="text-xs font-semibold text-tg-hint uppercase tracking-wide">
+                    Tus listados activos
+                  </p>
+                  {openMyListings.map((l) => (
+                    <div
+                      key={l.id}
+                      className="flex items-center justify-between bg-tg-bg-sec rounded-xl px-4 py-3"
+                    >
+                      <div>
+                        <span className="text-xl font-bold text-tg-text mr-2">
+                          {letterLabel(l.letter)}
+                        </span>
+                        <span className="text-sm text-tg-hint">{l.price} 🪙</span>
+                      </div>
+                      <button
+                        onClick={() => handleCancelListing(l.id)}
+                        disabled={cancelling === l.id}
+                        className="text-xs text-red-500 border border-red-300 rounded-lg px-3 py-1.5 active:opacity-70 disabled:opacity-40"
+                      >
+                        {cancelling === l.id ? '…' : 'Cancelar'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Create listing: pick letter */}
+              <div className="flex flex-col gap-2">
+                <p className="text-xs font-semibold text-tg-hint uppercase tracking-wide">
+                  Listar nueva letra
+                </p>
+
+                {inventoryEntries.length === 0 ? (
+                  <p className="text-sm text-tg-hint text-center py-3">
+                    Sin inventario para listar.
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {inventoryEntries.map(([key, level]) => (
+                      <button
+                        key={key}
+                        onClick={() => {
+                          setSelectedLetter(key === selectedLetter ? null : key);
+                          setListError(null);
+                        }}
+                        className={`
+                          relative w-12 h-12 rounded-xl font-bold text-sm flex items-center justify-center transition-colors
+                          ${selectedLetter === key
+                            ? 'bg-tg-button text-tg-btn-text'
+                            : 'bg-tg-bg-sec text-tg-text active:opacity-70'}
+                        `}
+                      >
+                        {letterLabel(key)}
+                        <span className="absolute -top-1 -right-1 text-[9px] bg-tg-hint text-white rounded-full w-4 h-4 flex items-center justify-center leading-none">
+                          {level}
+                        </span>
                       </button>
                     ))}
                   </div>
-                  {normalResult && (
-                    <p className="text-emerald-600 text-sm text-center font-semibold">
-                      ✅ Vendiste &quot;{normalResult.letter.toUpperCase()}&quot; → +{normalResult.earned} 🪙
-                    </p>
-                  )}
-                  {normalError && <p className="text-red-500 text-sm text-center">{normalError}</p>}
-                </>
-              )}
+                )}
 
-              {/* ── Black market tab ────────────────────────────────────── */}
-              {sellTab === 'black' && (
-                <>
-                  {/* Heat bar */}
-                  <div className="mb-4">
-                    <div className="flex justify-between items-center text-xs mb-1">
-                      <span className="text-tg-hint font-medium">🌡️ Actividad policial</span>
-                      <span className={`font-bold ${heatTextColor}`}>{heatLabel}</span>
-                    </div>
-                    <div className="h-2.5 bg-tg-bg-sec rounded-full overflow-hidden">
-                      <div className={`h-full rounded-full transition-all duration-700 ${heatColor}`}
-                        style={{ width: `${Math.max(heatPct * 100, 3)}%` }} />
-                    </div>
-                    <p className="text-[10px] text-tg-hint mt-1">
-                      Prob. de arresto: ~{(bmCatchProb * 100).toFixed(0)}% / min · Sube con capturas y menciones al mercado negro en el chat
+                {/* Price input + confirm */}
+                {selectedLetter && (
+                  <div className="flex flex-col gap-2 mt-1">
+                    <p className="text-xs text-tg-hint">
+                      Seleccionada: <strong className="text-tg-text">{letterLabel(selectedLetter)}</strong>
+                      {' · '}Precio sugerido: {cfg.SELL_BASE_PRICE} 🪙
                     </p>
+                    <div className="flex gap-2">
+                      <input
+                        type="number"
+                        min="1"
+                        max={cfg.MARKET_MAX_PRICE}
+                        value={listingPrice}
+                        onChange={(e) => setListingPrice(e.target.value)}
+                        placeholder={`Precio (1–${cfg.MARKET_MAX_PRICE})`}
+                        className="flex-1 bg-tg-bg-sec text-tg-text rounded-xl px-3 py-2 text-sm outline-none"
+                      />
+                      <button
+                        onClick={handleListLetter}
+                        disabled={listing || !listingPrice}
+                        className="bg-tg-button text-tg-btn-text text-sm font-semibold rounded-xl px-4 py-2 active:opacity-80 disabled:opacity-40"
+                      >
+                        {listing ? '…' : 'Listar'}
+                      </button>
+                    </div>
+                    {listError && (
+                      <p className="text-xs text-red-500">{listError}</p>
+                    )}
                   </div>
-
-                  <p className="text-xs text-tg-hint mb-4 leading-relaxed">
-                    Sin comisión: cobras <span className="font-semibold text-tg-text">{cfg.SELL_BASE_PRICE} 🪙</span> cuando recojas.
-                    Cada minuto el servidor revisa si te pilla — a más tiempo en el mercado, más riesgo.
-                    Si te pillan: multa de <span className="text-red-500 font-semibold">−{cfg.BLACK_MARKET_FINE} 🪙</span>.
-                    Los listados expiran automáticamente en{' '}
-                    <span className="font-semibold text-tg-text">{cfg.BLACK_MARKET_LISTING_SEC / 60} min</span> y la letra regresa.
-                  </p>
-
-                  {/* Active listings */}
-                  {pendingBm.length > 0 && (
-                    <div className="mb-4">
-                      <p className="text-[10px] font-semibold text-tg-hint uppercase tracking-wide mb-2">Listados activos</p>
-                      <div className="space-y-2">
-                        {pendingBm.map((l) => (
-                          <div key={l.id} className="flex items-center justify-between bg-tg-bg-sec rounded-lg px-3 py-2.5">
-                            <div>
-                              <span className="font-bold text-tg-text uppercase">{l.letter}</span>
-                              <span className="text-[10px] text-tg-hint ml-2">{fmtAgo(l.listed_at)} · {fmtExpiry(l.listed_at)}</span>
-                            </div>
-                            <button onClick={() => handleCollect(l.id)} disabled={bmCollecting === l.id}
-                              className="text-xs font-semibold bg-emerald-600 text-white rounded-lg px-3 py-1.5 active:opacity-70 disabled:opacity-50">
-                              {bmCollecting === l.id ? '…' : `Cobrar ${cfg.SELL_BASE_PRICE} 🪙`}
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Recent history */}
-                  {recentBm.length > 0 && (
-                    <div className="mb-4">
-                      <p className="text-[10px] font-semibold text-tg-hint uppercase tracking-wide mb-2">Historial reciente</p>
-                      <div className="space-y-1">
-                        {recentBm.map((l) => (
-                          <div key={l.id}
-                            className={`flex items-center justify-between rounded-lg px-3 py-1.5 text-xs
-                              ${l.status === 'caught'    ? 'bg-red-100 text-red-700'       : ''}
-                              ${l.status === 'collected' ? 'bg-emerald-100 text-emerald-700' : ''}
-                              ${l.status === 'expired'   ? 'bg-tg-bg-sec text-tg-hint'       : ''}`}>
-                            <span className="font-bold uppercase">{l.letter}</span>
-                            <span>
-                              {l.status === 'caught'    && `⚠️ Atrapado (−${cfg.BLACK_MARKET_FINE} 🪙)`}
-                              {l.status === 'collected' && `✅ Cobrado (+${cfg.SELL_BASE_PRICE} 🪙)`}
-                              {l.status === 'expired'   && '⏰ Expirado — letra devuelta'}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* List new letter grid */}
-                  {listableEntries.length > 0 ? (
-                    <>
-                      <p className="text-[10px] font-semibold text-tg-hint uppercase tracking-wide mb-2">Listar nueva letra</p>
-                      <div className="grid grid-cols-7 gap-1 mb-3">
-                        {listableEntries.map(([letter, count]) => (
-                          <button key={letter} onClick={() => handleListLetter(letter)} disabled={bmListing !== null}
-                            className={`flex flex-col items-center rounded-lg py-1.5 px-1 transition-opacity bg-gray-800 text-white active:opacity-70
-                              ${bmListing === letter ? 'opacity-50' : ''}
-                              ${bmListing !== null && bmListing !== letter ? 'opacity-30' : ''}`}>
-                            <span className="text-sm font-bold uppercase">{letter}</span>
-                            <span className="text-[10px] text-gray-400 font-semibold">{count}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </>
-                  ) : (
-                    <p className="text-xs text-tg-hint text-center py-2">
-                      {invEntries.length === 0 ? 'Sin letras en inventario.' : 'Todas las letras ya están listadas.'}
-                    </p>
-                  )}
-
-                  {bmListResult && (
-                    <p className="text-emerald-600 text-sm text-center font-semibold mb-1">
-                      🕵️ &quot;{bmListResult.toUpperCase()}&quot; en el mercado negro. ¡Recoge antes de que te pillen!
-                    </p>
-                  )}
-                  {bmListError && <p className="text-red-500 text-sm text-center">{bmListError}</p>}
-                </>
-              )}
+                )}
+              </div>
             </div>
           )}
 
-          {/* ── Inventory (read-only) ──────────────────────────────────────── */}
-          {invEntries.length > 0 && (
-            <>
-              <p className="text-xs text-tg-hint mb-2 font-semibold uppercase tracking-wide">Tu inventario</p>
-              <div className="grid grid-cols-7 gap-1 mb-4">
-                {invEntries.map(([letter, count]) => (
-                  <div key={letter} className="flex flex-col items-center bg-tg-bg-sec rounded-lg py-1.5 px-1">
-                    <span className="text-sm font-bold text-tg-text uppercase">{letter}</span>
-                    <span className="text-[10px] text-tg-button font-semibold">{count}</span>
-                  </div>
-                ))}
+          {/* ── 📣 Prompt tab ─────────────────────────────────────────── */}
+          {activeTab === 'prompt' && (
+            <div className="flex flex-col gap-4">
+              <p className="text-sm text-tg-hint text-center">
+                Lanza una pregunta comunitaria. La mejor respuesta gana monedas.
+              </p>
+              <div className="bg-tg-bg-sec rounded-xl p-3 text-xs text-tg-hint space-y-1">
+                <p>🏆 Ganador: +{cfg.PROMPT_WINNER_BONUS} 🪙</p>
+                <p>🥈 Segundo puesto: +{cfg.PROMPT_RUNNER_UP_BONUS} 🪙</p>
+                <p>⏱ Duración: {cfg.PROMPT_DURATION_SEC / 60} minutos</p>
               </div>
-            </>
-          )}
 
-          {/* ── Prompt card ───────────────────────────────────────────────── */}
-          <div className="border border-tg-bg-sec rounded-xl p-4">
-            <div className="flex items-start gap-3 mb-3">
-              <span className="text-3xl">📣</span>
-              <div>
-                <p className="font-semibold text-tg-text">Lanzar un prompt</p>
-                <p className="text-sm text-tg-hint">Inicia un prompt comunitario. El ganador recibe +100 🪙.</p>
-              </div>
+              {promptError && (
+                <p className="text-xs text-red-500 text-center">{promptError}</p>
+              )}
+
+              <button
+                onClick={handleBuyPrompt}
+                disabled={firingPrompt || coins < cfg.PROMPT_BUY_COST}
+                className="bg-tg-button text-tg-btn-text font-semibold rounded-xl py-3 active:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {firingPrompt ? 'Lanzando…' : `Lanzar por ${cfg.PROMPT_BUY_COST} 🪙`}
+              </button>
+
+              <p className="text-xs text-tg-hint text-center">
+                Saldo actual: {coins} 🪙
+              </p>
             </div>
-            {promptSuccess && <p className="text-emerald-500 text-sm text-center mb-2 font-semibold">🎉 ¡Prompt lanzado!</p>}
-            {promptError  && <p className="text-red-500 text-sm text-center mb-2">{promptError}</p>}
-            <button onClick={handleBuyPrompt} disabled={promptBuying || !canAffordPmt}
-              className={`w-full py-3 rounded-xl font-semibold text-sm transition-opacity ${canAffordPmt ? 'bg-tg-button text-tg-btn-text active:opacity-80' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
-              {promptBuying ? 'Lanzando…' : !canAffordPmt ? `Necesitas ${cfg.PROMPT_BUY_COST} monedas` : `Lanzar por ${cfg.PROMPT_BUY_COST} 🪙`}
-            </button>
-          </div>
+          )}
 
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
