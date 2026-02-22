@@ -18,7 +18,7 @@
  */
 
 const { db, stmts, requireUser } = require('../db/database');
-const { SELL_BASE_PRICE, MARKET_MAX_PRICE, MAX_LETTER_LEVEL } = require('../config');
+const { SELL_BASE_PRICE, MARKET_MAX_PRICE, MAX_LETTER_LEVEL, MARKET_COMMISSION } = require('../config');
 
 // ── Validation helper ─────────────────────────────────────────────────────
 
@@ -33,9 +33,11 @@ function isValidInventoryKey(key) {
  * Returns a complete market API (listLetter, buyListing, cancelListing,
  * getOpenListings, getUserListings) bound to the given set of prepared stmts.
  *
- * @param {object} s  { insert, getListing, resolve, getOpen, getUserList }
+ * @param {object} s           { insert, getListing, resolve, getOpen, getUserList }
+ * @param {number} [commission=0]  Fraction of the sale price that is taxed (burned).
+ *                               Seller receives floor(price * (1 - commission)).
  */
-function makeMarket(s) {
+function makeMarket(s, commission = 0) {
 
   function listLetter(sellerId, letter, price) {
     requireUser(sellerId);
@@ -68,8 +70,9 @@ function makeMarket(s) {
       if ((buyer.coins ?? 0) < listing.price) {
         throw new Error(`Monedas insuficientes. Necesitas ${listing.price} 🪙.`);
       }
-      stmts.updateCoins.run(-listing.price, buyerId);
-      stmts.updateCoins.run( listing.price, listing.seller_id);
+      const sellerReceives = Math.floor(listing.price * (1 - commission));
+      stmts.updateCoins.run(-listing.price,   buyerId);
+      stmts.updateCoins.run( sellerReceives,  listing.seller_id);
       const buyerFresh = requireUser(buyerId);
       const inv = JSON.parse(buyerFresh.inventory_json);
       inv[listing.letter] = Math.min((inv[listing.letter] ?? 0) + 1, MAX_LETTER_LEVEL);
@@ -79,11 +82,12 @@ function makeMarket(s) {
       const buyerUpdated = requireUser(buyerId);
       return {
         listingId,
-        letter:       listing.letter,
-        price:        listing.price,
-        sellerId:     listing.seller_id,
-        newInventory: inv,
-        newCoins:     buyerUpdated.coins,
+        letter:         listing.letter,
+        price:          listing.price,
+        sellerReceives,
+        sellerId:       listing.seller_id,
+        newInventory:   inv,
+        newCoins:       buyerUpdated.coins,
       };
     })();
   }
@@ -119,7 +123,7 @@ const regularMarket = makeMarket({
   resolve:     stmts.resolveMarketListing,
   getOpen:     stmts.getOpenMarketListings,
   getUserList: stmts.getUserMarketListings,
-});
+}, MARKET_COMMISSION);
 
 const blackMarket = makeMarket({
   insert:      stmts.insertBmListing,
@@ -146,4 +150,5 @@ module.exports = {
 
   SELL_BASE_PRICE,
   MARKET_MAX_PRICE,
+  MARKET_COMMISSION,
 };

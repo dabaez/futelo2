@@ -177,8 +177,9 @@ describe('buyListing', () => {
 
     const result = buyListing(99, 1);
 
+    // buyer pays full price; seller receives 80% (20% commission burned)
     expect(stmts.updateCoins.run).toHaveBeenCalledWith(-50, 99);     // deduct from buyer
-    expect(stmts.updateCoins.run).toHaveBeenCalledWith( 50, 10);     // credit to seller
+    expect(stmts.updateCoins.run).toHaveBeenCalledWith( 40, 10);     // credit 80% to seller
     expect(result.letter).toBe('b');
     expect(result.price).toBe(50);
     expect(result.sellerId).toBe(10);

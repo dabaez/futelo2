@@ -159,6 +159,7 @@ app.get('/api/config', (_req, res) => {
     TIER3_PENALTY:          config.TIER3_PENALTY,
     SELL_BASE_PRICE:        config.SELL_BASE_PRICE,
     MARKET_MAX_PRICE:       config.MARKET_MAX_PRICE,
+    MARKET_COMMISSION:      config.MARKET_COMMISSION,
     LOTTERY_START_COST:     config.LOTTERY_START_COST,
     LOTTERY_BET_AMOUNT:     config.LOTTERY_BET_AMOUNT,
     LOTTERY_DURATION_SEC:   config.LOTTERY_DURATION_SEC,

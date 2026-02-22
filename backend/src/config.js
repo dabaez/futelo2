@@ -65,6 +65,8 @@ module.exports = {
   SELL_BASE_PRICE: 15,
   /** Maximum price a seller can set for a listing. */
   MARKET_MAX_PRICE: 500,
+  /** Fraction of the sale price burned on the regular market (0.20 = 20% commission). Black market = 0. */
+  MARKET_COMMISSION: 0.20,
 
   // ── Beg system ─────────────────────────────────────────────────────────────
   /** Coins transferred when a player gives to a beggar. */
