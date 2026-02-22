@@ -153,7 +153,7 @@ app.get('/api/config', (_req, res) => {
   res.json({
     ROLL_COST:              config.ROLL_COST,
     ROLL_COST_SCALE:        config.ROLL_COST_SCALE,
-    ROLL_COUNT:             config.ROLL_COUNT,
+    LOOTBOX_TIERS:          config.LOOTBOX_TIERS,
     PROMPT_BUY_COST:        config.PROMPT_BUY_COST,
     PROMPT_WINNER_BONUS:    config.PROMPT_WINNER_BONUS,
     PROMPT_RUNNER_UP_BONUS: config.PROMPT_RUNNER_UP_BONUS,

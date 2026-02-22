@@ -354,15 +354,17 @@ describe('processMessage – transaction', () => {
 // shopRoll
 // ─────────────────────────────────────────────────────────────────────────────
 describe('shopRoll', () => {
-  test('deducts 50 coins and returns 3 new letters', () => {
+  test('deducts 50 coins and returns letters with a valid rarity tier', () => {
     const user = makeUser({ coins: 200 });
     requireUser.mockReturnValue(user);
     stmts.getUser.get.mockReturnValue({ ...user, coins: 150 });
 
     const result = shopRoll(1);
 
-    expect(result.newLetters).toHaveLength(3);
+    expect(result.newLetters.length).toBeGreaterThanOrEqual(1);
     expect(result.newCoins).toBe(150);
+    const validRarities = ['común', 'bueno', 'raro', 'épico', 'legendario'];
+    expect(validRarities).toContain(result.rarity);
   });
 
   test('throws when the user has fewer than 50 coins', () => {

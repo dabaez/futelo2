@@ -15,6 +15,47 @@ async function safeJson(res) {
   try { return JSON.parse(text); } catch { return null; }
 }
 
+// ── Lootbox rarity metadata ─────────────────────────────────────────────────
+// Must match the LOOTBOX_TIERS names in backend/src/config.js.
+// Full class names are used (no string interpolation) so Tailwind's purge sees them.
+const RARITY_META = {
+  'común': {
+    label: 'Común', emoji: '📦',
+    textClass:  'text-gray-400',
+    bgClass:    'bg-tg-bg-sec',
+    chipClass:  'bg-gray-600/40 text-gray-300',
+    celebrationEmoji: null, animated: false, pulse: false, legendary: false,
+  },
+  'bueno': {
+    label: 'Bueno', emoji: '✨',
+    textClass:  'text-green-400',
+    bgClass:    'bg-green-900/30 border border-green-600/30',
+    chipClass:  'bg-green-800/50 text-green-200',
+    celebrationEmoji: '✨  ✨', animated: true, pulse: false, legendary: false,
+  },
+  'raro': {
+    label: 'Raro', emoji: '⭐',
+    textClass:  'text-blue-400',
+    bgClass:    'bg-blue-900/30 border border-blue-500/40',
+    chipClass:  'bg-blue-800/50 text-blue-200',
+    celebrationEmoji: '⭐  ⭐  ⭐', animated: true, pulse: false, legendary: false,
+  },
+  'épico': {
+    label: '¡ÉPICO!', emoji: '💫',
+    textClass:  'text-purple-300',
+    bgClass:    'bg-purple-900/40 border border-purple-500/50',
+    chipClass:  'bg-purple-700/60 text-purple-100',
+    celebrationEmoji: '💫  🌟  💫', animated: true, pulse: true, legendary: false,
+  },
+  'legendario': {
+    label: '¡¡LEGENDARIO!!', emoji: '🏆',
+    textClass:  'text-yellow-300',
+    bgClass:    'bg-yellow-800/30 border-2 border-yellow-400/60',
+    chipClass:  'bg-yellow-600/50 text-yellow-100',
+    celebrationEmoji: '🎉  🏆  🎊  🌟  🎊  🏆  🎉', animated: true, pulse: true, legendary: true,
+  },
+};
+
 export default function ShopModal({
   isOpen,
   onClose,
@@ -156,7 +197,12 @@ export default function ShopModal({
       });
       const data = await safeJson(r);
       if (!r.ok) throw new Error(data?.error || 'Error en la tienda.');
-      setRollResult(data.newLetters);
+      setRollResult({ letters: data.newLetters, rarity: data.rarity });
+      // Haptic feedback scaled to rarity on Telegram
+      const haptic = window.Telegram?.WebApp?.HapticFeedback;
+      if      (data.rarity === 'legendario') haptic?.notificationOccurred('success');
+      else if (data.rarity === 'épico')      haptic?.impactOccurred('heavy');
+      else if (data.rarity === 'raro')       haptic?.impactOccurred('medium');
       onPurchase?.(data);
     } catch (e) {
       setRollError(e.message);
@@ -262,6 +308,7 @@ export default function ShopModal({
 
   // ── Derived: inventory keys + labels ────────────────────────────────────
   const isBroke  = coins < rollCost && totalLevels === 0;
+  const rollMeta  = rollResult ? (RARITY_META[rollResult.rarity] || RARITY_META['común']) : null;
 
   const inventoryEntries = Object.entries(inventory || {})
     .filter(([, v]) => v > 0)
@@ -336,15 +383,35 @@ export default function ShopModal({
           {activeTab === 'roll' && (
             <div className="flex flex-col gap-4">
               <p className="text-sm text-tg-hint text-center">
-                Desbloquea {cfg.ROLL_COUNT} letras aleatorias por {rollCost} 🪙
+                Abre una caja de letras — ¡la rareza es sorpresa!
               </p>
 
-              {rollResult && (
-                <div className="bg-tg-bg-sec rounded-xl p-3 text-center">
-                  <p className="text-xs text-tg-hint mb-1">¡Obtuviste!</p>
-                  <p className="text-lg font-bold text-tg-text tracking-widest">
-                    {rollResult.map((l) => letterLabel(l)).join('  ')}
+              {rollResult && rollMeta && (
+                <div className={`rounded-2xl p-4 text-center transition-all ${
+                  rollMeta.bgClass} ${rollMeta.pulse ? 'animate-pulse' : ''}`}>
+                  {rollMeta.celebrationEmoji && (
+                    <p className={`text-2xl mb-2 ${rollMeta.animated ? 'animate-bounce' : ''}`}>
+                      {rollMeta.celebrationEmoji}
+                    </p>
+                  )}
+                  <p className={`text-2xl font-black tracking-wider mb-3 ${rollMeta.textClass}`}>
+                    {rollMeta.emoji} {rollMeta.label}
                   </p>
+                  <div className="flex flex-wrap justify-center gap-2">
+                    {rollResult.letters.map((l, i) => (
+                      <span
+                        key={i}
+                        className={`font-black text-xl px-3 py-2 rounded-xl ${
+                          rollMeta.chipClass} ${rollMeta.animated ? 'animate-bounce' : ''}`}
+                        style={rollMeta.animated ? { animationDelay: `${i * 100}ms` } : {}}
+                      >
+                        {letterLabel(l)}
+                      </span>
+                    ))}
+                  </div>
+                  {rollMeta.legendary && (
+                    <p className="text-2xl mt-3 animate-bounce">🌟  ✨  🌟  ✨  🌟</p>
+                  )}
                 </div>
               )}
 
@@ -357,7 +424,7 @@ export default function ShopModal({
                 disabled={rolling || coins < rollCost}
                 className="bg-tg-button text-tg-btn-text font-semibold rounded-xl py-3 active:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                {rolling ? 'Tirando…' : `Tirar por ${rollCost} 🪙`}
+                {rolling ? 'Abriendo…' : `Abrir caja por ${rollCost} 🪙`}
               </button>
 
               <p className="text-xs text-tg-hint text-center">

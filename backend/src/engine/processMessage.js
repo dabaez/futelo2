@@ -27,7 +27,7 @@ const {
   LOCK_DURATION_SEC,
   ROLL_COST,
   ROLL_COST_SCALE,
-  ROLL_COUNT,
+  LOOTBOX_TIERS,
   TIER1_COINS,
   FIRST_MESSAGE_LETTERS,
   TIER3_PENALTY,
@@ -273,6 +273,19 @@ function processMessage(userId, text) {
  * @param {number} userId
  * @returns {{ newLetters: string[], newCoins: number, newInventory: object }}
  */
+/**
+ * Pick a random rarity tier from LOOTBOX_TIERS using weighted selection.
+ */
+function rollRarity() {
+  const total = LOOTBOX_TIERS.reduce((s, t) => s + t.weight, 0);
+  let r = Math.random() * total;
+  for (const tier of LOOTBOX_TIERS) {
+    r -= tier.weight;
+    if (r <= 0) return tier;
+  }
+  return LOOTBOX_TIERS[LOOTBOX_TIERS.length - 1];
+}
+
 function shopRoll(userId) {
   const user      = requireUser(userId);
   const inventory = JSON.parse(user.inventory_json || '{}');
@@ -282,7 +295,8 @@ function shopRoll(userId) {
     throw new Error(`Monedas insuficientes. La tirada cuesta ${rollCost} 🪙 con tu inventario actual.`);
   }
 
-  const newLetters = randomLetters(ROLL_COUNT);
+  const tier       = rollRarity();
+  const newLetters = randomLetters(tier.letters);
 
   const updatedInventory = { ...inventory };
   for (const letter of newLetters) {
@@ -298,10 +312,11 @@ function shopRoll(userId) {
 
   return {
     newLetters,
+    rarity:       tier.name,
     newCoins:     fresh.coins,
     newInventory: updatedInventory,
     rollCost,
   };
 }
 
-module.exports = { processMessage, shopRoll, computeRollCost, letterRequirements, ROLL_COST, ROLL_COST_SCALE, ROLL_COUNT };
+module.exports = { processMessage, shopRoll, computeRollCost, letterRequirements, ROLL_COST, ROLL_COST_SCALE };

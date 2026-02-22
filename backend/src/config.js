@@ -36,8 +36,19 @@ module.exports = {
    * Makes rolling progressively more expensive as players near the cap.
    */
   ROLL_COST_SCALE: 2,
-  /** Number of random letters unlocked per roll. */
-  ROLL_COUNT: 3,
+  /**
+   * Lootbox rarity tiers for the letter roll shop.
+   * Each tier defines how many letter levels are awarded and its relative
+   * selection weight. Weights are relative — they don't need to sum to 100.
+   * Average letters per roll ≈ 2.95 (same as the old fixed ROLL_COUNT: 3).
+   */
+  LOOTBOX_TIERS: [
+    { name: 'común',      letters: 1,  weight: 40 },
+    { name: 'bueno',      letters: 3,  weight: 35 },
+    { name: 'raro',       letters: 5,  weight: 18 },
+    { name: 'épico',      letters: 8,  weight: 6  },
+    { name: 'legendario', letters: 12, weight: 1  },
+  ],
   /** Maximum unlock level any single letter can reach in a player's inventory. */
   MAX_LETTER_LEVEL: 6,
   /**

@@ -306,7 +306,17 @@ export default function App() {
       newCoins:     result.newCoins,
       newInventory: result.newInventory,
     });
-    showToast(`🎰 Resultado: ${result.newLetters.join(', ').toUpperCase()}`, 'success');
+    const letters = result.newLetters?.join(', ').toUpperCase() ?? '';
+    const rarityToast = {
+      'común':      `📦 Común: ${letters}`,
+      'bueno':      `✨ Bueno: ${letters}`,
+      'raro':       `⭐ ¡Raro! ${letters}`,
+      'épico':      `💫 ¡ÉPICO! ${letters}`,
+      'legendario': `🏆 ¡¡LEGENDARIO!! ${letters}`,
+    };
+    const msg  = rarityToast[result.rarity] ?? `🎰 ${letters}`;
+    const type = (result.rarity === 'legendario' || result.rarity === 'épico') ? 'success' : 'info';
+    showToast(msg, type, { duration: result.rarity === 'legendario' ? 6000 : 3000 });
   }, [updateUser]);
 
   // ── Black market purchase callback ──────────────────────────────────────
