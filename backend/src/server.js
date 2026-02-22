@@ -35,18 +35,29 @@ const http       = require('http');
 const { Server } = require('socket.io');
 const cors       = require('cors');
 
-const { upsertUser, requireUser, stmts } = require('./db/database');
-const { processMessage, shopRoll, sellLetter } = require('./engine/processMessage');
+const { db, upsertUser, requireUser, stmts } = require('./db/database');
+const { processMessage, shopRoll } = require('./engine/processMessage');
 const {
-  listLetter, collectListing, sweepCatchRolls, getUserListings,
-  addMentionHeat, getHeat, catchProbForHeat,
-}                                            = require('./engine/blackMarket');
+  listLetter, buyListing, cancelListing, getOpenListings, getUserListings,
+  bmListLetter, bmBuyListing, bmCancelListing, getBmOpenListings, getBmUserListings,
+}                                   = require('./engine/market');
 const { validateInitData }               = require('./bot/auth');
 const {
   startPrompt, getActivePrompt, getPromptWithReplies,
   submitReply, castVote, closePrompt, buyPrompt, PROMPT_BUY_COST,
 }                                        = require('./engine/promptEngine');
+const {
+  startLottery, placeBet, closeLottery,
+  getActiveLottery, getLotteryWithBets, getCarryOver,
+  LOTTERY_START_COST, LOTTERY_BET_AMOUNT,
+}                                        = require('./engine/lottery');
 const config                             = require('./config');
+
+const BEG_GIFT_AMOUNT  = config.BEG_GIFT_AMOUNT;
+const BEG_COOLDOWN_SEC = config.BEG_COOLDOWN_SEC;
+
+// In-memory cooldown map: userId → unix-ms when the cooldown expires
+const begCooldowns = new Map();
 
 const PORT      = Number(process.env.SERVER_PORT) || 3001;
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -77,7 +88,7 @@ const server = http.createServer(app);
 app.use(cors());
 app.use(express.json());
 
-// ── Socket.io ─────────────────────────────────────────────────────────────
+// ── Socket.io ──────────────────────────────────────────────────────────────
 const io = new Server(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] },
   // Keep memory pressure low on 1 GB RAM
@@ -136,27 +147,21 @@ function socketAuth(socket, next) {
 // ── REST: /api/config ───────────────────────────────────────────────────
 // Exposes public game constants so the frontend never has to duplicate them.
 app.get('/api/config', (_req, res) => {
-  const heat = getHeat();
   res.json({
-    ROLL_COST:                  config.ROLL_COST,
-    ROLL_COUNT:                 config.ROLL_COUNT,
-    PROMPT_BUY_COST:            config.PROMPT_BUY_COST,
-    PROMPT_WINNER_BONUS:        config.PROMPT_WINNER_BONUS,
-    PROMPT_RUNNER_UP_BONUS:     config.PROMPT_RUNNER_UP_BONUS,
-    PROMPT_DURATION_SEC:        config.PROMPT_DURATION_SEC,
-    TIER1_COINS:                config.TIER1_COINS,
-    TIER3_PENALTY:              config.TIER3_PENALTY,
-    SELL_BASE_PRICE:            config.SELL_BASE_PRICE,
-    SELL_COMMISSION_RATE:       config.SELL_COMMISSION_RATE,
-    BLACK_MARKET_FINE:          config.BLACK_MARKET_FINE,
-    BLACK_MARKET_BASE_PROB:     config.BLACK_MARKET_BASE_PROB,
-    BLACK_MARKET_MAX_PROB:      config.BLACK_MARKET_MAX_PROB,
-    BLACK_MARKET_LISTING_SEC:   config.BLACK_MARKET_LISTING_SEC,
-    HEAT_CATCH_INCREMENT:       config.HEAT_CATCH_INCREMENT,
-    HEAT_MENTION_INCREMENT:     config.HEAT_MENTION_INCREMENT,
-    // Live values
-    heat,
-    catchProbPerMin: catchProbForHeat(heat),
+    ROLL_COST:              config.ROLL_COST,
+    ROLL_COST_SCALE:        config.ROLL_COST_SCALE,
+    ROLL_COUNT:             config.ROLL_COUNT,
+    PROMPT_BUY_COST:        config.PROMPT_BUY_COST,
+    PROMPT_WINNER_BONUS:    config.PROMPT_WINNER_BONUS,
+    PROMPT_RUNNER_UP_BONUS: config.PROMPT_RUNNER_UP_BONUS,
+    PROMPT_DURATION_SEC:    config.PROMPT_DURATION_SEC,
+    TIER1_COINS:            config.TIER1_COINS,
+    TIER3_PENALTY:          config.TIER3_PENALTY,
+    SELL_BASE_PRICE:        config.SELL_BASE_PRICE,
+    MARKET_MAX_PRICE:       config.MARKET_MAX_PRICE,
+    LOTTERY_START_COST:     config.LOTTERY_START_COST,
+    LOTTERY_BET_AMOUNT:     config.LOTTERY_BET_AMOUNT,
+    LOTTERY_DURATION_SEC:   config.LOTTERY_DURATION_SEC,
   });
 });
 
@@ -238,12 +243,6 @@ app.post('/api/message', authMiddleware, (req, res) => {
       tier:       result.tier,
     }).catch(() => {});
 
-    // Black market heat: bump if the message mentions it
-    if (/mercado\s+negro/i.test(text)) {
-      const newHeat = addMentionHeat();
-      io.emit('bm_heat_update', { heat: newHeat, catchProbPerMin: catchProbForHeat(newHeat) });
-    }
-
     res.json({ ok: true, ...result });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -265,42 +264,121 @@ app.post('/api/shop/roll', authMiddleware, (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
-// ── REST: /api/shop/sell  (normal market, instant) ───────────────────────
-app.post('/api/shop/sell', authMiddleware, (req, res) => {
-  const { letter } = req.body;
+// ── REST: P2P Letter Market ──────────────────────────────────────────────────
+
+// GET /api/market/listings – all open listings from other players
+app.get('/api/market/listings', (_req, res) => {
   try {
-    const result = sellLetter(req.tgUser.id, letter);
+    res.json(getOpenListings());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/market/my-listings – caller's own listings (any status)
+app.get('/api/market/my-listings', authMiddleware, (req, res) => {
+  try {
+    res.json(getUserListings(req.tgUser.id));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/market/list – escrow a letter and create an open listing
+app.post('/api/market/list', authMiddleware, (req, res) => {
+  const { letter, price } = req.body;
+  try {
+    const result = listLetter(req.tgUser.id, letter, price);
+    // Inventory changed immediately (escrow) – push to seller's sockets
+    io.to(`user:${req.tgUser.id}`).emit('user_update', {
+      newInventory: result.newInventory,
+    });
+    // Tell everyone a new listing is available
+    io.emit('new_market_listing', {
+      id:                  result.listingId,
+      seller_id:           req.tgUser.id,
+      letter:              result.letter,
+      price:               result.price,
+      listed_at:           Math.floor(Date.now() / 1000),
+      seller_username:     req.tgUser.username   || '',
+      seller_first_name:   req.tgUser.first_name || '',
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/market/buy/:id – buy a listing
+app.post('/api/market/buy/:id', authMiddleware, (req, res) => {
+  try {
+    const result = buyListing(req.tgUser.id, Number(req.params.id));
+    // Update buyer's coins + inventory
     io.to(`user:${req.tgUser.id}`).emit('user_update', {
       newCoins:     result.newCoins,
       newInventory: result.newInventory,
     });
+    // Update seller's coins
+    io.to(`user:${result.sellerId}`).emit('user_update', {
+      newCoins: requireUser(result.sellerId).coins,
+    });
+    // Tell all clients this listing is gone
+    io.emit('market_listing_sold', { listingId: result.listingId });
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// ── REST: Black market (listing system) ─────────────────────────────────
-
-// GET /api/blackmarket/heat – current heat + catch probability
-app.get('/api/blackmarket/heat', (_req, res) => {
-  const heat = getHeat();
-  res.json({ heat, catchProbPerMin: catchProbForHeat(heat) });
-});
-
-// GET /api/blackmarket/listings – caller's recent listings
-app.get('/api/blackmarket/listings', authMiddleware, (req, res) => {
-  res.json(getUserListings(req.tgUser.id));
-});
-
-// POST /api/blackmarket/list – escrow a letter level on the black market
-app.post('/api/blackmarket/list', authMiddleware, (req, res) => {
-  const { letter } = req.body;
+// POST /api/market/cancel/:id – seller cancels their own listing
+app.post('/api/market/cancel/:id', authMiddleware, (req, res) => {
   try {
-    const result = listLetter(req.tgUser.id, letter);
-    // Inventory changed immediately (escrow) – push to user's sockets
+    const result = cancelListing(req.tgUser.id, Number(req.params.id));
+    // Return letter to seller
     io.to(`user:${req.tgUser.id}`).emit('user_update', {
       newInventory: result.newInventory,
+    });
+    // Tell all clients this listing was removed
+    io.emit('market_listing_cancelled', { listingId: result.listingId });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ── SECRET BLACK MARKET (/api/bm/*) ────────────────────────────────────────
+// Same P2P mechanics as the regular market but on a separate table.
+// The UI is hidden until the user taps the shop button three times fast.
+
+app.get('/api/bm/listings', (_req, res) => {
+  try {
+    res.json(getBmOpenListings());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/bm/my-listings', authMiddleware, (req, res) => {
+  try {
+    res.json(getBmUserListings(req.tgUser.id));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/bm/list', authMiddleware, (req, res) => {
+  const { letter, price } = req.body;
+  try {
+    const result = bmListLetter(req.tgUser.id, letter, price);
+    io.to(`user:${req.tgUser.id}`).emit('user_update', { newInventory: result.newInventory });
+    io.emit('bm_new_listing', {
+      id:                result.listingId,
+      seller_id:         req.tgUser.id,
+      letter:            result.letter,
+      price:             result.price,
+      listed_at:         Math.floor(Date.now() / 1000),
+      seller_username:   req.tgUser.username   || '',
+      seller_first_name: req.tgUser.first_name || '',
     });
     res.json(result);
   } catch (err) {
@@ -308,11 +386,28 @@ app.post('/api/blackmarket/list', authMiddleware, (req, res) => {
   }
 });
 
-// POST /api/blackmarket/collect/:id – claim coins from a safe listing
-app.post('/api/blackmarket/collect/:id', authMiddleware, (req, res) => {
+app.post('/api/bm/buy/:id', authMiddleware, (req, res) => {
   try {
-    const result = collectListing(req.tgUser.id, Number(req.params.id));
-    io.to(`user:${req.tgUser.id}`).emit('user_update', { newCoins: result.newCoins });
+    const result = bmBuyListing(req.tgUser.id, Number(req.params.id));
+    io.to(`user:${req.tgUser.id}`).emit('user_update', {
+      newCoins:     result.newCoins,
+      newInventory: result.newInventory,
+    });
+    io.to(`user:${result.sellerId}`).emit('user_update', {
+      newCoins: requireUser(result.sellerId).coins,
+    });
+    io.emit('bm_listing_sold', { listingId: result.listingId });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/bm/cancel/:id', authMiddleware, (req, res) => {
+  try {
+    const result = bmCancelListing(req.tgUser.id, Number(req.params.id));
+    io.to(`user:${req.tgUser.id}`).emit('user_update', { newInventory: result.newInventory });
+    io.emit('bm_listing_cancelled', { listingId: result.listingId });
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -323,7 +418,11 @@ app.post('/api/blackmarket/collect/:id', authMiddleware, (req, res) => {
 app.get('/api/prompt/active', (req, res) => {
   const prompt = getActivePrompt();
   if (!prompt) return res.json({ prompt: null, replies: [] });
-  res.json(getPromptWithReplies(prompt.id));
+  const data = getPromptWithReplies(prompt.id);
+  res.json({
+    prompt:  { id: data.id, text: data.text, closesAt: data.closesAt, secondsLeft: data.secondsLeft },
+    replies: data.replies,
+  });
 });
 // ── REST: /api/shop/prompt ───────────────────────────────────────────
 app.post('/api/shop/prompt', authMiddleware, (req, res) => {
@@ -344,6 +443,46 @@ app.post('/api/shop/prompt', authMiddleware, (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
+
+// ── REST: /api/lottery ────────────────────────────────────────────────────
+app.get('/api/lottery/active', (req, res) => {
+  const round = getActiveLottery();
+  if (!round) return res.json({ round: null, carryOver: getCarryOver() });
+  const data = getLotteryWithBets(round.id);
+  res.json({ round: data, carryOver: 0 });
+});
+
+app.post('/api/lottery/start', authMiddleware, (req, res) => {
+  try {
+    const result = startLottery(req.tgUser.id);
+    io.emit('new_lottery', getActiveLottery()); // fetch the just-created round (strips secret_letter)
+    io.to(`user:${req.tgUser.id}`).emit('user_update', {
+      newCoins:  result.newCoins,
+      coinDelta: -LOTTERY_START_COST,
+      newLetters: [],
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/lottery/bet', authMiddleware, (req, res) => {
+  try {
+    const { roundId, letter } = req.body;
+    const result = placeBet(req.tgUser.id, roundId, letter);
+    io.emit('lottery_bet_placed', { roundId, bet: result.bet, jackpot: result.jackpot });
+    io.to(`user:${req.tgUser.id}`).emit('user_update', {
+      newCoins:  result.newCoins,
+      coinDelta: -LOTTERY_BET_AMOUNT,
+      newLetters: [],
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // ── Socket.io ─────────────────────────────────────────────────────────────
 io.use(socketAuth);
 
@@ -396,6 +535,11 @@ io.on('connection', (socket) => {
     try {
       const reply = submitReply(userId, promptId, text);
       io.emit('new_prompt_reply', reply);
+      socket.emit('user_update', {
+        newCoins:   reply.newCoins,
+        coinDelta:  reply.replyBonus,
+        newLetters: [],
+      });
     } catch (err) {
       socket.emit('prompt_error', { reason: err.message });
     }
@@ -408,6 +552,48 @@ io.on('connection', (socket) => {
       io.emit('vote_update', result);
     } catch (err) {
       socket.emit('prompt_error', { reason: err.message });
+    }
+  });
+
+  // ── Event: beg ────────────────────────────────────────────────────
+  socket.on('beg', () => {
+    const now        = Date.now();
+    const cooldownUntil = begCooldowns.get(userId) || 0;
+    if (now < cooldownUntil) return; // silently rate-limit
+    begCooldowns.set(userId, now + BEG_COOLDOWN_SEC * 1000);
+    const user = requireUser(userId);
+    // Broadcast to everyone else
+    socket.broadcast.emit('new_beg', {
+      userId,
+      username:  user.username,
+      firstName: user.first_name,
+    });
+  });
+
+  // ── Event: give_coins ─────────────────────────────────────────────
+  socket.on('give_coins', ({ targetUserId }) => {
+    if (targetUserId === userId) return;
+    try {
+      const giver = requireUser(userId);
+      if (giver.coins < BEG_GIFT_AMOUNT) return;
+      db.transaction(() => {
+        stmts.updateCoins.run(-BEG_GIFT_AMOUNT, userId);
+        stmts.updateCoins.run(BEG_GIFT_AMOUNT, targetUserId);
+      })();
+      const freshGiver  = requireUser(userId);
+      const freshTarget = requireUser(targetUserId);
+      socket.emit('user_update', {
+        newCoins:  freshGiver.coins,
+        coinDelta: -BEG_GIFT_AMOUNT,
+        newLetters: [],
+      });
+      io.to(`user:${targetUserId}`).emit('user_update', {
+        newCoins:  freshTarget.coins,
+        coinDelta: BEG_GIFT_AMOUNT,
+        newLetters: [],
+      });
+    } catch (err) {
+      // ignore
     }
   });
 });
@@ -455,50 +641,36 @@ if (bot) {
 const INACTIVITY_SEC = config.INACTIVITY_SEC;
 
 if (require.main === module) {
-  // ── Black market sweep (every 60 s) ────────────────────────────────────
-  // Expires stale listings, decays heat, rolls catch probability.
-  setInterval(() => {
-    const { caught, expired } = sweepCatchRolls();
-
-    for (const c of caught) {
-      io.to(`user:${c.userId}`).emit('bm_caught', {
-        listingId:    c.listingId,
-        letter:       c.letter,
-        fine:         c.fine,
-        newCoins:     c.newCoins,
-        newInventory: c.newInventory,
-      });
-    }
-
-    for (const e of expired) {
-      io.to(`user:${e.userId}`).emit('bm_expired', {
-        listingId:    e.listingId,
-        letter:       e.letter,
-        newInventory: e.newInventory,
-      });
-    }
-
-    if (caught.length > 0 || expired.length > 0) {
-      const heat = getHeat();
-      io.emit('bm_heat_update', { heat, catchProbPerMin: catchProbForHeat(heat) });
-      if (caught.length > 0) {
-        console.log(`[BM] ${caught.length} caught, ${expired.length} expired. heat=${heat.toFixed(3)}`);
-      }
-    }
-  }, 60_000);
-}
-
-if (require.main === module) {
   setInterval(() => {
     const nowSec = Math.floor(Date.now() / 1000);
     const active = getActivePrompt();
+
+    // Close expired lottery round
+    const activeLottery = getActiveLottery();
+    if (activeLottery && nowSec >= activeLottery.closes_at) {
+      const lResult = closeLottery(activeLottery.id);
+      if (lResult) {
+        // Emit winner updates before broadcast so balances are current
+        lResult.winners.forEach((w) => {
+          const fresh = requireUser(w.userId);
+          io.to(`user:${w.userId}`).emit('user_update', {
+            newCoins:  fresh.coins,
+            coinDelta: lResult.prize,
+            newLetters: [],
+          });
+        });
+        io.emit('lottery_closed', lResult);
+        console.log(`[Lottery] Closed. Letter: ${lResult.secretLetter}. Winners: ${lResult.winners.map((w) => w.userId).join(', ') || 'none'}`);
+      }
+    }
 
     // Close expired prompt
     if (active && nowSec >= active.closes_at) {
       const result = closePrompt(active.id);
       if (result) {
         io.emit('prompt_closed', result);
-        console.log(`[Prompt] Closed "${active.text}". Winner: ${result.winner?.userId || 'none'}`);
+        const winnerNames = result.winners?.map((w) => w.userId).join(', ') || 'none';
+        console.log(`[Prompt] Closed "${active.text}". Winners: ${winnerNames}`);
       }
     }
 
