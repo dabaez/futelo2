@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Header             from './components/Header.jsx';
 import ChatFeed           from './components/ChatFeed.jsx';
 import RestrictedKeyboard from './components/RestrictedKeyboard.jsx';
 import ShopModal          from './components/ShopModal.jsx';
+import BlackMarketModal   from './components/BlackMarketModal.jsx';
+import LotteryModal       from './components/LotteryModal.jsx';
 import PromptBanner       from './components/PromptBanner.jsx';
 import DevUserPicker      from './components/DevUserPicker.jsx';
 import { useAuth }        from './hooks/useAuth.js';
@@ -45,7 +47,18 @@ export default function App() {
   const [sending,   setSending]   = useState(false);
   const [sendError, setSendError] = useState(null);
   const [shopOpen,  setShopOpen]  = useState(false);
+  const [bmOpen,    setBmOpen]    = useState(false);
+  const [lotteryOpen, setLotteryOpen] = useState(false);
   const [toast,     setToast]     = useState(null); // { text, type }
+
+  // Triple-tap detection for secret black market
+  const shopClicksRef  = useRef(0);
+  const shopClickTimer = useRef(null);
+
+  // ── Lottery state ─────────────────────────────────────────────────
+  const [lotteryRound,    setLotteryRound]    = useState(null);
+  const [lotteryCarryOver, setLotteryCarryOver] = useState(0);
+  const [lotteryCfg,      setLotteryCfg]      = useState({ LOTTERY_START_COST: 200, LOTTERY_BET_AMOUNT: 50 });
 
   // ── Prompt state ────────────────────────────────────────────────────────
   const [prompt,      setPrompt]      = useState(null);   // { id, text, closesAt }
@@ -64,6 +77,22 @@ export default function App() {
           setPromptReplies(data.replies || []);
         }
       })
+      .catch(() => {});
+  }, []);
+
+  // Hydrate active lottery on mount + fetch cfg
+  useEffect(() => {
+    const base = import.meta.env.VITE_BACKEND_URL || '';
+    fetch(`${base}/api/lottery/active`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.round) setLotteryRound(data.round);
+        else setLotteryCarryOver(data.carryOver || 0);
+      })
+      .catch(() => {});
+    fetch(`${base}/api/config`)
+      .then((r) => r.json())
+      .then((data) => setLotteryCfg(data))
       .catch(() => {});
   }, []);
 
@@ -119,9 +148,12 @@ export default function App() {
     const onPromptClosed = (result) => {
       setPrompt((p) => p ? { ...p, closed: true } : p);
       setReplyMode(false);
-      if (result.winner) {
+      const winners   = result.winners   || [];
+      const runnersUp = result.runnersUp || [];
+      if (winners.length > 0) {
+        const names = winners.map((w) => w.firstName || w.username).join(', ');
         showToast(
-          `🏆 ¡"${result.winner.firstName || result.winner.username}" ganó el prompt! +${result.winner.bonus} 🪙`,
+          `🏆 ¡${names} ganó el prompt! +${winners[0].bonus} 🪙`,
           'success'
         );
       } else {
@@ -129,9 +161,9 @@ export default function App() {
       }
       // Update own coins if winner/runner-up
       if (user) {
-        const bonus =
-          result.winner?.userId   === user.id ? result.winner.bonus :
-          result.runnerUp?.userId === user.id ? result.runnerUp.bonus : 0;
+        const asWinner   = winners.find((w)   => w.userId === user.id);
+        const asRunnerUp = runnersUp.find((r) => r.userId === user.id);
+        const bonus = asWinner ? asWinner.bonus : asRunnerUp ? asRunnerUp.bonus : 0;
         if (bonus > 0) {
           updateUser({ newCoins: (user.coins || 0) + bonus });
           showToast(`🎉 ¡Ganaste ${bonus} 🪙 en el prompt!`, 'success');
@@ -150,19 +182,52 @@ export default function App() {
     socket.on('new_prompt_reply',  onNewPromptReply);
     socket.on('vote_update',       onVoteUpdate);
     socket.on('prompt_closed',     onPromptClosed);
+
+    // ── Beg events ───────────────────────────────────────────────
+    const onNewBeg = ({ userId: beggarId, firstName, username }) => {
+      if (beggarId === user?.id) return;
+      const name = firstName || username || 'Alguien';
+      showToast(`🙏 ${name} necesita monedas`, 'info', {
+        duration: 8000,
+        action: {
+          label: 'Dar 10 🪙',
+          fn: () => socket.emit('give_coins', { targetUserId: beggarId }),
+        },
+      });
+    };
+    socket.on('new_beg', onNewBeg);
     socket.on('prompt_error',      onPromptError);
 
-    // ── Black market events ──────────────────────────────────────────
-    const onBmCaught = ({ letter, fine, newCoins, newInventory }) => {
-      updateUser({ newCoins, newInventory });
-      showToast(`⚠️ ¡Atrapado! Letra "${letter.toUpperCase()}" confiscada. Multa: -${fine} 🪙`, 'error');
+    // ── Lottery events ──────────────────────────────────────────
+    const onNewLottery = (round) => {
+      setLotteryRound(round);
+      setLotteryCarryOver(0);
+      showToast('🎲 ¡Nueva lotería! Apuesta por tu letra.', 'info');
     };
-    const onBmExpired = ({ letter }) => {
-      showToast(`⏰ Listado de "${letter.toUpperCase()}" expirado. Letra devuelta.`, 'warn');
+    const onLotteryBetPlaced = ({ roundId, bet, jackpot }) => {
+      setLotteryRound((prev) => {
+        if (!prev || prev.id !== roundId) return prev;
+        const bets = prev.bets || [];
+        return { ...prev, jackpot, bets: [...bets.filter((b) => b.userId !== bet.userId), bet] };
+      });
     };
-
-    socket.on('bm_caught',  onBmCaught);
-    socket.on('bm_expired', onBmExpired);
+    const onLotteryClosed = (result) => {
+      setLotteryRound(null);
+      if (result.carryOver) {
+        setLotteryCarryOver(result.jackpot);
+        showToast(`🎲 Nadie acertó la letra "${result.secretLetter.toUpperCase()}". Bote acumulado: ${result.jackpot} 🪙`, 'warn', { duration: 6000 });
+      } else {
+        setLotteryCarryOver(0);
+        const names = result.winners.map((w) => w.firstName || w.username).join(', ');
+        showToast(`🎉 ¡${names} acertó la "${result.secretLetter.toUpperCase()}"! +${result.prize} 🪙`, 'success', { duration: 6000 });
+        if (user && result.winners.some((w) => w.userId === user.id)) {
+          updateUser({ newCoins: (user.coins || 0) + result.prize });
+        }
+      }
+    };
+    socket.on('new_lottery',        onNewLottery);
+    socket.on('lottery_bet_placed', onLotteryBetPlaced);
+    socket.on('lottery_closed',     onLotteryClosed);
 
     return () => {
       socket.off('user_update',      onUpdate);
@@ -171,15 +236,17 @@ export default function App() {
       socket.off('new_prompt_reply',  onNewPromptReply);
       socket.off('vote_update',       onVoteUpdate);
       socket.off('prompt_closed',     onPromptClosed);
+      socket.off('new_beg',           onNewBeg);
+      socket.off('new_lottery',        onNewLottery);
+      socket.off('lottery_bet_placed', onLotteryBetPlaced);
+      socket.off('lottery_closed',     onLotteryClosed);
       socket.off('prompt_error',      onPromptError);
-      socket.off('bm_caught',  onBmCaught);
-      socket.off('bm_expired', onBmExpired);
     };
   }, [socket, updateUser]);
 
-  function showToast(text, type = 'info') {
-    setToast({ text, type });
-    setTimeout(() => setToast(null), 3000);
+  function showToast(text, type = 'info', { duration = 3000, action } = {}) {
+    setToast({ text, type, action });
+    setTimeout(() => setToast(null), duration);
   }
 
   // ── Send message ──────────────────────────────────────────────────────
@@ -209,13 +276,39 @@ export default function App() {
     socket?.emit('vote_reply', { replyId });
   }, [socket]);
 
-  // ── Shop purchase callback ─────────────────────────────────────────────
+  // ── Triple-tap shop button → secret black market ─────────────────────
+  const handleShopClick = useCallback(() => {
+    shopClicksRef.current += 1;
+    if (shopClicksRef.current === 1) {
+      shopClickTimer.current = setTimeout(() => { shopClicksRef.current = 0; }, 1500);
+      setShopOpen(true);
+    }
+    if (shopClicksRef.current >= 3) {
+      clearTimeout(shopClickTimer.current);
+      shopClicksRef.current = 0;
+      setShopOpen(false);
+      setBmOpen(true);
+    }
+  }, []);
+
+  // ── Shop purchase callback (roll + regular market) ───────────────────────────────────────────────
   const handlePurchase = useCallback((result) => {
     updateUser({
       newCoins:     result.newCoins,
       newInventory: result.newInventory,
     });
     showToast(`🎰 Resultado: ${result.newLetters.join(', ').toUpperCase()}`, 'success');
+  }, [updateUser]);
+
+  // ── Black market purchase callback ──────────────────────────────────────
+  const handleBmPurchase = useCallback((result) => {
+    updateUser({
+      newCoins:     result.newCoins     ?? result.newInventory ? result.newCoins : undefined,
+      newInventory: result.newInventory,
+    });
+    if (result.letter) {
+      showToast(`🛒 Compraste "${result.letter.toUpperCase()}" por ${result.price} 🪙`, 'success');
+    }
   }, [updateUser]);
 
   // ── Prompt fired from shop ─────────────────────────────────────────────
@@ -226,7 +319,24 @@ export default function App() {
     setReplyMode(false);
     showToast('📣 ¡Tu prompt está activo! Las respuestas están abiertas.', 'success');
   }, [updateUser]);
+  // ── Lottery callbacks ────────────────────────────────────────────
+  const handleLotteryStarted = useCallback((data) => {
+    // Immediately apply round from REST response so UI updates even if socket
+    // event is delayed or arrives in a different order.
+    if (data.round) {
+      setLotteryRound(data.round);
+      setLotteryCarryOver(0);
+    }
+    updateUser({ newCoins: data.newCoins });
+  }, [updateUser]);
 
+  const handleBetPlaced = useCallback((bet, jackpot) => {
+    setLotteryRound((prev) => {
+      if (!prev) return prev;
+      const bets = prev.bets || [];
+      return { ...prev, jackpot, bets: [...bets.filter((b) => b.userId !== bet.userId), bet] };
+    });
+  }, []);
   // ── Dev mode: show user picker when there is no session yet ──────────────
   if (!initData) {
     return <DevUserPicker onSelect={setInitData} />;
@@ -284,7 +394,9 @@ export default function App() {
       <Header
         coins={user?.coins}
         connected={connected}
-        onShopOpen={() => setShopOpen(true)}
+        onShopOpen={handleShopClick}
+        onLotteryOpen={() => setLotteryOpen(true)}
+        hasActiveLottery={!!lotteryRound}
       />
 
       {/* ── Dev identity banner (only shown outside Telegram) ──────────── */}
@@ -353,6 +465,29 @@ export default function App() {
         socket={socket}
       />
 
+      {/* ── Black market modal ─────────────────────────────────────────── */}
+      <BlackMarketModal
+        isOpen={bmOpen}
+        onClose={() => setBmOpen(false)}
+        initData={initData}
+        coins={user?.coins ?? 0}
+        inventory={inventory}
+        onPurchase={handleBmPurchase}
+        socket={socket}
+      />
+      {/* ── Lottery modal ─────────────────────────────────────────────── */}
+      <LotteryModal
+        isOpen={lotteryOpen}
+        onClose={() => setLotteryOpen(false)}
+        initData={initData}
+        coins={user?.coins ?? 0}
+        userId={user?.id}
+        lotteryRound={lotteryRound}
+        carryOver={lotteryCarryOver}
+        onLotteryStarted={handleLotteryStarted}
+        onBetPlaced={handleBetPlaced}
+        cfg={lotteryCfg}
+      />
       {/* ── Toast notification ──────────────────────────────────────────── */}
       {toast && (
         <div
@@ -360,10 +495,18 @@ export default function App() {
             fixed top-4 left-1/2 -translate-x-1/2 z-50
             ${toastColour} text-white text-xs font-semibold
             px-4 py-2 rounded-full shadow-lg animate-slide-up
-            pointer-events-none
+            ${toast.action ? 'pointer-events-auto flex items-center gap-2' : 'pointer-events-none'}
           `}
         >
-          {toast.text}
+          <span>{toast.text}</span>
+          {toast.action && (
+            <button
+              onClick={() => { toast.action.fn(); setToast(null); }}
+              className="bg-white/25 hover:bg-white/40 rounded-full px-2 py-0.5 font-bold active:opacity-70"
+            >
+              {toast.action.label}
+            </button>
+          )}
         </div>
       )}
     </div>
