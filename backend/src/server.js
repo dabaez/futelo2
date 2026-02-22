@@ -337,6 +337,11 @@ app.post('/api/market/buy/:id', authMiddleware, (req, res) => {
     });
     // Tell all clients this listing is gone
     io.emit('market_listing_sold', { listingId: result.listingId });
+    // Notify the seller specifically (targeted to their socket room)
+    io.to(`user:${result.sellerId}`).emit('listing_sold_seller', {
+      letter: result.letter,
+      price:  result.sellerReceives,
+    });
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -410,6 +415,11 @@ app.post('/api/bm/buy/:id', authMiddleware, (req, res) => {
       newCoins: requireUser(result.sellerId).coins,
     });
     io.emit('bm_listing_sold', { listingId: result.listingId });
+    // Notify the BM seller specifically
+    io.to(`user:${result.sellerId}`).emit('bm_listing_sold_seller', {
+      letter: result.letter,
+      price:  result.sellerReceives,
+    });
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });

@@ -230,6 +230,14 @@ export default function App() {
     socket.on('lottery_bet_placed', onLotteryBetPlaced);
     socket.on('lottery_closed',     onLotteryClosed);
 
+    const onListingSoldSeller   = ({ letter, price }) =>
+      showToast(`💰 ¡Vendiste "${letter.toUpperCase()}" por ${price} 🪙!`, 'success');
+    const onBmListingSoldSeller = ({ letter, price }) =>
+      showToast(`🕵️ ¡Vendiste "${letter.toUpperCase()}" por ${price} 🪙 (mercado negro)!`, 'success');
+
+    socket.on('listing_sold_seller',    onListingSoldSeller);
+    socket.on('bm_listing_sold_seller', onBmListingSoldSeller);
+
     return () => {
       socket.off('user_update',      onUpdate);
       socket.off('rejected_message', onRejected);
@@ -242,6 +250,8 @@ export default function App() {
       socket.off('lottery_bet_placed', onLotteryBetPlaced);
       socket.off('lottery_closed',     onLotteryClosed);
       socket.off('prompt_error',      onPromptError);
+      socket.off('listing_sold_seller',    onListingSoldSeller);
+      socket.off('bm_listing_sold_seller', onBmListingSoldSeller);
     };
   }, [socket, updateUser]);
 
