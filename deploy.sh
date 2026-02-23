@@ -9,6 +9,13 @@ WEB_DIR="/var/www/futelo/dist"
 NGINX_CONF="/etc/nginx/sites-available/futelo"
 NGINX_LINK="/etc/nginx/sites-enabled/futelo"
 
+# Load domain from backend .env (must be configured before deploying)
+if [ -f "$REPO_ROOT/backend/.env" ]; then
+  # shellcheck disable=SC1091
+  set -o allexport && source "$REPO_ROOT/backend/.env" && set +o allexport
+fi
+DOMAIN="${DOMAIN:-your-domain.com}"
+
 echo "==> Installing backend dependencies…"
 cd "$REPO_ROOT/backend"
 npm ci --omit=dev
@@ -22,8 +29,8 @@ echo "==> Deploying frontend to $WEB_DIR…"
 sudo mkdir -p "$WEB_DIR"
 sudo cp -r dist/. "$WEB_DIR/"
 
-echo "==> Installing Nginx config…"
-sudo cp "$REPO_ROOT/nginx/futelo.conf" "$NGINX_CONF"
+echo "==> Installing Nginx config (domain: $DOMAIN)…"
+sed "s/your-domain\.com/$DOMAIN/g" "$REPO_ROOT/nginx/futelo.conf" | sudo tee "$NGINX_CONF" > /dev/null
 if [ ! -L "$NGINX_LINK" ]; then
   sudo ln -s "$NGINX_CONF" "$NGINX_LINK"
 fi
