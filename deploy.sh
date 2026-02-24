@@ -30,7 +30,7 @@ sudo mkdir -p "$WEB_DIR"
 sudo cp -r dist/. "$WEB_DIR/"
 
 echo "==> Installing Nginx config (domain: $DOMAIN)…"
-sed "s/your-domain\.com/$DOMAIN/g" "$REPO_ROOT/nginx/futelo.conf" | sudo tee "$NGINX_CONF" > /dev/null
+sed "s|your-domain\.com|$DOMAIN|g" "$REPO_ROOT/nginx/futelo.conf" | sudo tee "$NGINX_CONF" > /dev/null
 if [ ! -L "$NGINX_LINK" ]; then
   sudo ln -s "$NGINX_CONF" "$NGINX_LINK"
 fi
