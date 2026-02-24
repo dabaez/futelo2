@@ -37,8 +37,9 @@ const canDeleteCache = new Map();
 async function checkDeletePermission(chatId) {
   if (canDeleteCache.has(chatId)) return canDeleteCache.get(chatId);
   try {
-    const me     = await bot.api.getMe();
-    const member = await bot.api.getChatMember(chatId, me.id);
+    // bot.botInfo is populated after bot.init() / bot.start(); fall back to getMe() if needed
+    const botId  = bot.botInfo?.id ?? (await bot.api.getMe()).id;
+    const member = await bot.api.getChatMember(chatId, botId);
     const ok     = member.status === 'administrator' && member.can_delete_messages === true;
     canDeleteCache.set(chatId, ok);
     return ok;

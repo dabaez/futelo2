@@ -753,11 +753,14 @@ if (bot) {
   if (BOT_MODE === 'webhook') {
     const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN;
     const WEBHOOK_PATH   = `/bot${BOT_TOKEN}`;
-    bot.api.setWebhook(`${WEBHOOK_DOMAIN}${WEBHOOK_PATH}`);
+    // init() fetches botInfo so handleUpdate works correctly in webhook mode
+    bot.init()
+      .then(() => bot.api.setWebhook(`${WEBHOOK_DOMAIN}${WEBHOOK_PATH}`))
+      .then(() => console.log('[Bot] Webhook mode active'))
+      .catch(console.error);
     app.post(WEBHOOK_PATH, (req, res) => {
       bot.handleUpdate(req.body).then(() => res.sendStatus(200));
     });
-    console.log('[Bot] Webhook mode active');
   } else {
     bot.start().catch(console.error);
     console.log('[Bot] Long-polling mode active');
