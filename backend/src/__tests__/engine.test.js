@@ -40,6 +40,9 @@ const mockStmts = {
   // Individual tests can override with mockReturnValueOnce({ cnt: 0 }) to test
   // the first-message letter-grant path.
   getUserMessageCount:  { get: jest.fn(() => ({ cnt: 1 })) },
+  // Per-room streak tracking (default: no prior streak in room)
+  getRoomStreak:        { get: jest.fn(() => null) },
+  upsertRoomStreak:     { run: jest.fn() },
 };
 
 jest.mock('../db/database', () => ({
@@ -91,6 +94,8 @@ beforeEach(() => {
   mockStmts.insertMessage.run.mockReturnValue({ lastInsertRowid: 1 });
   // Default: not a first message (cnt > 0 means the user has sent before)
   mockStmts.getUserMessageCount.get.mockReturnValue({ cnt: 1 });
+  // Default: no prior room streak (treated as 0)
+  mockStmts.getRoomStreak.get.mockReturnValue(null);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -238,9 +243,10 @@ describe('processMessage – Tier 1 (different user)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('processMessage – Tier 2 (spam warning)', () => {
   test('returns tier 2, 0 coins, 0 letters', () => {
-    // streak_count starts at 1, so next send makes it 2 → Tier 2
+    // Room streak is 1, so next send (same user) makes it 2 → Tier 2
     setupUser(makeUser({ streak_count: 1 }));
     setupGameState({ lastSenderId: 1 }); // same user
+    stmts.getRoomStreak.get.mockReturnValue({ streak: 1 });
     stmts.getUser.get.mockReturnValue(makeUser({ coins: 100 }));
 
     const result = processMessage(1, 'a');
@@ -258,9 +264,10 @@ describe('processMessage – Tier 2 (spam warning)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('processMessage – Tier 3 (spam penalty)', () => {
   test('returns tier 3, -50 coins, a locked letter', () => {
-    // streak_count starts at 2, so next send makes it 3 → Tier 3
+    // Room streak is 2, so next send (same user) makes it 3 → Tier 3
     setupUser(makeUser({ streak_count: 2, inventory_json: JSON.stringify({ a: 3 }) }));
     setupGameState({ lastSenderId: 1 });
+    stmts.getRoomStreak.get.mockReturnValue({ streak: 2 });
     stmts.getUser.get.mockReturnValue(makeUser({ coins: 50 }));
 
     const result = processMessage(1, 'a');
@@ -276,6 +283,7 @@ describe('processMessage – Tier 3 (spam penalty)', () => {
   test('upsertLock is called with the locked letter', () => {
     setupUser(makeUser({ streak_count: 2, inventory_json: JSON.stringify({ b: 2 }) }));
     setupGameState({ lastSenderId: 1 });
+    stmts.getRoomStreak.get.mockReturnValue({ streak: 2 });
     stmts.getUser.get.mockReturnValue(makeUser({ coins: 50 }));
 
     const result = processMessage(1, 'b');
@@ -295,6 +303,7 @@ describe('processMessage – Tier 3 (spam penalty)', () => {
   test('streak keeps increasing beyond 3', () => {
     setupUser(makeUser({ streak_count: 5, inventory_json: JSON.stringify({ a: 5 }) }));
     setupGameState({ lastSenderId: 1 });
+    stmts.getRoomStreak.get.mockReturnValue({ streak: 5 });
     stmts.getUser.get.mockReturnValue(makeUser({ coins: 50 }));
 
     const result = processMessage(1, 'a');
@@ -306,6 +315,7 @@ describe('processMessage – Tier 3 (spam penalty)', () => {
     // User has only 20 coins; penalty is 50 → message is blocked entirely
     setupUser(makeUser({ streak_count: 2, coins: 20, inventory_json: JSON.stringify({ a: 3 }) }));
     setupGameState({ lastSenderId: 1 });
+    stmts.getRoomStreak.get.mockReturnValue({ streak: 2 });
 
     expect(() => processMessage(1, 'a')).toThrow(/penalizaci/i);
   });
@@ -314,6 +324,7 @@ describe('processMessage – Tier 3 (spam penalty)', () => {
     // User has exactly 50 coins – just enough to pay the penalty
     setupUser(makeUser({ streak_count: 2, coins: 50, inventory_json: JSON.stringify({ a: 3 }) }));
     setupGameState({ lastSenderId: 1 });
+    stmts.getRoomStreak.get.mockReturnValue({ streak: 2 });
     stmts.getUser.get.mockReturnValue(makeUser({ coins: 0 })); // 50 - 50 = 0 after penalty
 
     const result = processMessage(1, 'a');
@@ -345,7 +356,7 @@ describe('processMessage – transaction', () => {
     processMessage(1, 'a');
 
     expect(stmts.updateUser.run).toHaveBeenCalledTimes(1);
-    expect(stmts.setState.run).toHaveBeenCalledWith('last_sender_id', '1');
+    expect(stmts.setState.run).toHaveBeenCalledWith('room:0:last_sender', '1');
     expect(stmts.insertMessage.run).toHaveBeenCalledTimes(1);
   });
 });

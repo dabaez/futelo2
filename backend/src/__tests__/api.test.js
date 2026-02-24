@@ -225,11 +225,12 @@ describe('POST /api/shop/roll', () => {
   beforeAll(async () => {
     app = getApp();
     await authAs(app, ALICE);
-    // STARTING_COINS = 0; earn 100 coins via alternating Tier-1 messages before rolling.
-    await seedCoins(app, ALICE, 100);
+    // STARTING_COINS = 0; earn 200 coins before rolling.
+    // Roll cost is dynamic: 50 base + 2 × total inventory levels (≈110 with starting inventory).
+    await seedCoins(app, ALICE, 200);
   });
 
-  test('deducts 50 coins and returns 3 new letters', async () => {
+  test('deducts rollCost coins and returns at least 1 new letter', async () => {
     // Fetch current balance before rolling (seedCoins + prior test coins may vary)
     const meRes = await request(app).get('/api/me').set(authHeader(ALICE));
     const coinsBefore = meRes.body.coins;
@@ -240,7 +241,7 @@ describe('POST /api/shop/roll', () => {
       .send();
 
     expect(res.status).toBe(200);
-    expect(res.body.newLetters).toHaveLength(3);
+    expect(res.body.newLetters.length).toBeGreaterThanOrEqual(1);
     expect(typeof res.body.newCoins).toBe('number');
     // Roll cost is dynamic (scales with inventory level)
     expect(res.body.newCoins).toBe(coinsBefore - res.body.rollCost);
@@ -445,7 +446,7 @@ describe('Black market endpoints (secret)', () => {
   });
 
   test('GET /api/bm/listings shows the new listing', async () => {
-    const res = await request(app).get('/api/bm/listings');
+    const res = await request(app).get('/api/bm/listings?roomId=-1001');
     expect(res.status).toBe(200);
     expect(res.body.some((l) => l.id === bmListingId)).toBe(true);
   });

@@ -40,7 +40,7 @@ export default function App() {
   // initData starts as the real Telegram value; set by DevUserPicker in dev
   const [initData, setInitData] = useState(TG_REAL_INIT_DATA);
 
-  const { user, loading, error, updateUser } = useAuth(initData);
+  const { user, chatId, loading, error, updateUser } = useAuth(initData);
   const { socket, connected, sendMessage }   = useSocket(initData);
 
   const [draft,     setDraft]     = useState('');
@@ -66,9 +66,10 @@ export default function App() {
   const [replyMode,   setReplyMode]   = useState(false);  // keyboard targets prompt
   const [promptError, setPromptError] = useState(null);
 
-  // Hydrate active prompt on mount
+  // Hydrate active prompt on mount (re-runs when chatId is known)
   useEffect(() => {
-    const url = (import.meta.env.VITE_BACKEND_URL || '') + '/api/prompt/active';
+    const base = import.meta.env.VITE_BACKEND_URL || '';
+    const url  = chatId ? `${base}/api/prompt/active?roomId=${chatId}` : `${base}/api/prompt/active`;
     fetch(url)
       .then((r) => r.json())
       .then((data) => {
@@ -78,12 +79,13 @@ export default function App() {
         }
       })
       .catch(() => {});
-  }, []);
+  }, [chatId]);
 
-  // Hydrate active lottery on mount + fetch cfg
+  // Hydrate active lottery on mount + fetch cfg (re-runs when chatId is known)
   useEffect(() => {
     const base = import.meta.env.VITE_BACKEND_URL || '';
-    fetch(`${base}/api/lottery/active`)
+    const roomQ = chatId ? `?roomId=${chatId}` : '';
+    fetch(`${base}/api/lottery/active${roomQ}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.round) setLotteryRound(data.round);
@@ -94,7 +96,7 @@ export default function App() {
       .then((r) => r.json())
       .then((data) => setLotteryCfg(data))
       .catch(() => {});
-  }, []);
+  }, [chatId]);
 
   // ── Show toast notifications for economy events ─────────────────────────
   useEffect(() => {
@@ -428,7 +430,7 @@ export default function App() {
       )}
 
       {/* ── Chat feed ──────────────────────────────────────────────────── */}
-      <ChatFeed socket={socket} myUserId={user?.id} />
+      <ChatFeed socket={socket} myUserId={user?.id} chatId={chatId} />
 
       {/* ── Error bar ──────────────────────────────────────────────────── */}
       {sendError && (
@@ -471,6 +473,7 @@ export default function App() {
         isOpen={shopOpen}
         onClose={() => setShopOpen(false)}
         initData={initData}
+        chatId={chatId}
         coins={user?.coins ?? 0}
         inventory={inventory}
         pickaxeHits={user?.pickaxeHits ?? 0}
@@ -484,6 +487,7 @@ export default function App() {
         isOpen={bmOpen}
         onClose={() => setBmOpen(false)}
         initData={initData}
+        chatId={chatId}
         coins={user?.coins ?? 0}
         inventory={inventory}
         onPurchase={handleBmPurchase}
@@ -494,6 +498,7 @@ export default function App() {
         isOpen={lotteryOpen}
         onClose={() => setLotteryOpen(false)}
         initData={initData}
+        chatId={chatId}
         coins={user?.coins ?? 0}
         userId={user?.id}
         inventory={inventory}

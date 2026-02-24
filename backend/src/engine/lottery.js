@@ -31,22 +31,22 @@ function pickLetter() {
   return ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
 }
 
-function getCarryOver() {
-  const row = stmts.getState.get('lottery_jackpot');
+function getCarryOver(roomId = 0) {
+  const row = stmts.getState.get(`room:${roomId}:lottery_jackpot`);
   return row ? (parseInt(row.value, 10) || 0) : 0;
 }
 
-function setCarryOver(amount) {
-  stmts.setState.run('lottery_jackpot', String(amount));
+function setCarryOver(amount, roomId = 0) {
+  stmts.setState.run(`room:${roomId}:lottery_jackpot`, String(amount));
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
- * Returns the active round or null (never exposes secret_letter).
+ * Returns the active round for a room or null (never exposes secret_letter).
  */
-function getActiveLottery() {
-  const round = stmts.getActiveLotteryRound.get();
+function getActiveLottery(roomId = 0) {
+  const round = stmts.getActiveLotteryRound.get(roomId);
   if (!round) return null;
   const { secret_letter, ...safe } = round;   // strip from result
   return safe;
@@ -71,9 +71,9 @@ function getLotteryWithBets(roundId) {
  * Start a new lottery round.
  * Costs LOTTERY_START_COST; picks up any carry-over jackpot from game_state.
  */
-function startLottery(userId) {
+function startLottery(userId, roomId = 0) {
   requireUser(userId);
-  if (stmts.getActiveLotteryRound.get()) {
+  if (stmts.getActiveLotteryRound.get(roomId)) {
     throw new Error('Ya hay una lotería activa. Espera a que termine.');
   }
 
@@ -82,14 +82,14 @@ function startLottery(userId) {
     if (user.coins < LOTTERY_START_COST) {
       throw new Error(`Monedas insuficientes. Iniciar la lotería cuesta ${LOTTERY_START_COST} 🪙.`);
     }
-    const carryOver    = getCarryOver();
+    const carryOver    = getCarryOver(roomId);
     const jackpot      = carryOver + LOTTERY_START_COST;
     const secretLetter = pickLetter();
     const closesAt     = Math.floor(Date.now() / 1000) + LOTTERY_DURATION_SEC;
 
     stmts.updateCoins.run(-LOTTERY_START_COST, userId);
-    setCarryOver(0);  // consumed into this round
-    const result  = stmts.insertLotteryRound.run(secretLetter, jackpot, userId, closesAt);
+    setCarryOver(0, roomId);  // consumed into this round
+    const result  = stmts.insertLotteryRound.run(secretLetter, jackpot, userId, closesAt, roomId);
     const roundId = result.lastInsertRowid;
     const fresh   = requireUser(userId);
     const { secret_letter: _sl, ...roundSafe } = stmts.getLotteryRoundById.get(roundId);
@@ -181,11 +181,12 @@ function closeLottery(roundId) {
 
   return db.transaction(() => {
     stmts.closeLotteryRound.run(roundId);
+    const roomId = round.room_id ?? 0;
 
     if (winnerUserIds.length === 0) {
       // Nobody guessed correctly – convert all bet letters to coins and carry over
       const totalCarry = round.jackpot + bets.length * GAMBLING_COINS_PER_LETTER;
-      setCarryOver(totalCarry);
+      setCarryOver(totalCarry, roomId);
       return {
         roundId,
         secretLetter: round.secret_letter,
@@ -220,7 +221,7 @@ function closeLottery(roundId) {
       };
     });
 
-    setCarryOver(0);
+    setCarryOver(0, roomId);
     return {
       roundId,
       secretLetter: round.secret_letter,

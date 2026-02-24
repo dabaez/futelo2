@@ -35,7 +35,7 @@ const http       = require('http');
 const { Server } = require('socket.io');
 const cors       = require('cors');
 
-const { db, upsertUser, requireUser, stmts } = require('./db/database');
+const { db, upsertUser, requireUser, upsertRoom, stmts } = require('./db/database');
 const { processMessage, shopRoll } = require('./engine/processMessage');
 const {
   listLetter, buyListing, cancelListing, getOpenListings, getUserListings,
@@ -69,12 +69,12 @@ const BOT_MODE  = process.env.BOT_MODE || 'polling';
 const DEV_MODE  = process.env.DEV_MODE === 'true';
 
 // Lazy-load the bot only when a real token exists (optional in dev mode)
-let bot, broadcastToGroup;
+let bot;
 if (!DEV_MODE || BOT_TOKEN) {
-  ({ bot, broadcastToGroup } = require('./bot/bot'));
+  ({ bot } = require('./bot/bot'));
 } else {
-  // Stub – messages are broadcasted nowhere in dev mode
-  broadcastToGroup = async () => {};
+  // Bot not started in dev mode without a token
+  bot = null;
 }
 
 if (!DEV_MODE && !BOT_TOKEN) {
@@ -107,7 +107,7 @@ function authMiddleware(req, res, next) {
     const initData = req.headers['x-init-data'] || req.body?.initData;
     if (!initData) return res.status(401).json({ error: 'Missing initData' });
 
-    const tgUser = validateInitData(initData, BOT_TOKEN);
+    const { user: tgUser, chatId, chatTitle } = validateInitData(initData, BOT_TOKEN);
 
     // Auto-upsert so the user always exists in SQLite
     upsertUser({
@@ -117,11 +117,17 @@ function authMiddleware(req, res, next) {
       photo_url:  tgUser.photo_url  || '',
     });
 
-    req.tgUser = tgUser;
+    // Auto-upsert the room (group) if a chatId is present
+    if (chatId && chatId !== 0) {
+      upsertRoom(chatId, chatTitle || '');
+    }
+
+    req.tgUser  = tgUser;
+    req.chatId  = chatId  || 0;
     next();
   } catch (err) {
     // In dev mode give a friendlier hint
-    const hint = DEV_MODE ? ' (use a dev token like: dev:1001:alice:Alice)' : '';
+    const hint = DEV_MODE ? ' (use a dev token like: dev:1001:alice:Alice:-1001:Dev Room)' : '';
     res.status(403).json({ error: err.message + hint });
   }
 }
@@ -132,7 +138,7 @@ function socketAuth(socket, next) {
     const initData = socket.handshake.auth?.initData;
     if (!initData) return next(new Error('Missing initData'));
 
-    const tgUser = validateInitData(initData, BOT_TOKEN);
+    const { user: tgUser, chatId, chatTitle } = validateInitData(initData, BOT_TOKEN);
     upsertUser({
       id:         tgUser.id,
       username:   tgUser.username   || '',
@@ -140,10 +146,15 @@ function socketAuth(socket, next) {
       photo_url:  tgUser.photo_url  || '',
     });
 
+    if (chatId && chatId !== 0) {
+      upsertRoom(chatId, chatTitle || '');
+    }
+
     socket.tgUser = tgUser;
+    socket.chatId = chatId || 0;
     next();
   } catch (err) {
-    const hint = DEV_MODE ? ' Use dev token: dev:USER_ID:username:Name' : '';
+    const hint = DEV_MODE ? ' Use dev token: dev:USER_ID:username:Name:CHAT_ID' : '';
     next(new Error('Unauthorized: ' + err.message + hint));
   }
 }
@@ -190,6 +201,7 @@ app.post('/api/auth', authMiddleware, (req, res) => {
   const locks  = stmts.getLocks.all(user.id, nowSec);
 
   res.json({
+    chatId: req.chatId,
     user: {
       id:          user.id,
       username:    user.username,
@@ -225,8 +237,9 @@ app.get('/api/me', authMiddleware, (req, res) => {
 
 // ── REST: /api/messages ────────────────────────────────────────────────────
 app.get('/api/messages', (req, res) => {
-  const limit = Math.min(Number(req.query.limit) || 50, 200);
-  const rows  = stmts.getRecentMessages.all(limit).reverse();  // oldest first
+  const limit  = Math.min(Number(req.query.limit) || 50, 200);
+  const roomId = Number(req.query.roomId) || 0;
+  const rows   = stmts.getRecentMessages.all(roomId, limit).reverse();  // oldest first
 
   res.json(
     rows.map((r) => ({
@@ -245,23 +258,15 @@ app.get('/api/messages', (req, res) => {
 // ── REST: /api/message ─────────────────────────────────────────────────────
 app.post('/api/message', authMiddleware, (req, res) => {
   const { text } = req.body;
+  const roomId   = req.chatId;
 
   try {
-    const result = processMessage(req.tgUser.id, text);
+    const result = processMessage(req.tgUser.id, text, roomId);
 
-    // Broadcast via Socket.io
+    // Broadcast via Socket.io to the room
     const user = requireUser(req.tgUser.id);
     const payload = buildMessagePayload(user, text, result);
-    io.emit('new_message', payload);
-
-    // Mirror to Telegram group (fire-and-forget)
-    broadcastToGroup({
-      username:   user.username,
-      first_name: user.first_name,
-      text,
-      coinDelta:  result.coinDelta,
-      tier:       result.tier,
-    }).catch(() => {});
+    io.to(`room:${roomId}`).emit('new_message', payload);
 
     res.json({ ok: true, ...result });
   } catch (err) {
@@ -287,9 +292,10 @@ app.post('/api/shop/roll', authMiddleware, (req, res) => {
 // ── REST: P2P Letter Market ──────────────────────────────────────────────────
 
 // GET /api/market/listings – all open listings from other players
-app.get('/api/market/listings', (_req, res) => {
+app.get('/api/market/listings', (req, res) => {
+  const roomId = Number(req.query.roomId) || 0;
   try {
-    res.json(getOpenListings());
+    res.json(getOpenListings(roomId));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -298,7 +304,7 @@ app.get('/api/market/listings', (_req, res) => {
 // GET /api/market/my-listings – caller's own listings (any status)
 app.get('/api/market/my-listings', authMiddleware, (req, res) => {
   try {
-    res.json(getUserListings(req.tgUser.id));
+    res.json(getUserListings(req.tgUser.id, req.chatId));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -307,14 +313,15 @@ app.get('/api/market/my-listings', authMiddleware, (req, res) => {
 // POST /api/market/list – escrow a letter and create an open listing
 app.post('/api/market/list', authMiddleware, (req, res) => {
   const { letter, price } = req.body;
+  const roomId = req.chatId;
   try {
-    const result = listLetter(req.tgUser.id, letter, price);
+    const result = listLetter(req.tgUser.id, letter, price, roomId);
     // Inventory changed immediately (escrow) – push to seller's sockets
     io.to(`user:${req.tgUser.id}`).emit('user_update', {
       newInventory: result.newInventory,
     });
-    // Tell everyone a new listing is available
-    io.emit('new_market_listing', {
+    // Tell everyone in the room a new listing is available
+    io.to(`room:${roomId}`).emit('new_market_listing', {
       id:                  result.listingId,
       seller_id:           req.tgUser.id,
       letter:              result.letter,
@@ -331,6 +338,7 @@ app.post('/api/market/list', authMiddleware, (req, res) => {
 
 // POST /api/market/buy/:id – buy a listing
 app.post('/api/market/buy/:id', authMiddleware, (req, res) => {
+  const roomId = req.chatId;
   try {
     const result = buyListing(req.tgUser.id, Number(req.params.id));
     // Update buyer's coins + inventory
@@ -342,8 +350,8 @@ app.post('/api/market/buy/:id', authMiddleware, (req, res) => {
     io.to(`user:${result.sellerId}`).emit('user_update', {
       newCoins: requireUser(result.sellerId).coins,
     });
-    // Tell all clients this listing is gone
-    io.emit('market_listing_sold', { listingId: result.listingId });
+    // Tell all clients in the room this listing is gone
+    io.to(`room:${roomId}`).emit('market_listing_sold', { listingId: result.listingId });
     // Notify the seller — queued so offline sellers see it on reconnect
     notifyUser(
       result.sellerId,
@@ -358,14 +366,15 @@ app.post('/api/market/buy/:id', authMiddleware, (req, res) => {
 
 // POST /api/market/cancel/:id – seller cancels their own listing
 app.post('/api/market/cancel/:id', authMiddleware, (req, res) => {
+  const roomId = req.chatId;
   try {
     const result = cancelListing(req.tgUser.id, Number(req.params.id));
     // Return letter to seller
     io.to(`user:${req.tgUser.id}`).emit('user_update', {
       newInventory: result.newInventory,
     });
-    // Tell all clients this listing was removed
-    io.emit('market_listing_cancelled', { listingId: result.listingId });
+    // Tell all clients in the room this listing was removed
+    io.to(`room:${roomId}`).emit('market_listing_cancelled', { listingId: result.listingId });
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -376,9 +385,10 @@ app.post('/api/market/cancel/:id', authMiddleware, (req, res) => {
 // Same P2P mechanics as the regular market but on a separate table.
 // The UI is hidden until the user taps the shop button three times fast.
 
-app.get('/api/bm/listings', (_req, res) => {
+app.get('/api/bm/listings', (req, res) => {
+  const roomId = Number(req.query.roomId) || 0;
   try {
-    res.json(getBmOpenListings());
+    res.json(getBmOpenListings(roomId));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -386,7 +396,7 @@ app.get('/api/bm/listings', (_req, res) => {
 
 app.get('/api/bm/my-listings', authMiddleware, (req, res) => {
   try {
-    res.json(getBmUserListings(req.tgUser.id));
+    res.json(getBmUserListings(req.tgUser.id, req.chatId));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -394,10 +404,11 @@ app.get('/api/bm/my-listings', authMiddleware, (req, res) => {
 
 app.post('/api/bm/list', authMiddleware, (req, res) => {
   const { letter, price } = req.body;
+  const roomId = req.chatId;
   try {
-    const result = bmListLetter(req.tgUser.id, letter, price);
+    const result = bmListLetter(req.tgUser.id, letter, price, roomId);
     io.to(`user:${req.tgUser.id}`).emit('user_update', { newInventory: result.newInventory });
-    io.emit('bm_new_listing', {
+    io.to(`room:${roomId}`).emit('bm_new_listing', {
       id:                result.listingId,
       seller_id:         req.tgUser.id,
       letter:            result.letter,
@@ -413,6 +424,7 @@ app.post('/api/bm/list', authMiddleware, (req, res) => {
 });
 
 app.post('/api/bm/buy/:id', authMiddleware, (req, res) => {
+  const roomId = req.chatId;
   try {
     const result = bmBuyListing(req.tgUser.id, Number(req.params.id));
     io.to(`user:${req.tgUser.id}`).emit('user_update', {
@@ -422,7 +434,7 @@ app.post('/api/bm/buy/:id', authMiddleware, (req, res) => {
     io.to(`user:${result.sellerId}`).emit('user_update', {
       newCoins: requireUser(result.sellerId).coins,
     });
-    io.emit('bm_listing_sold', { listingId: result.listingId });
+    io.to(`room:${roomId}`).emit('bm_listing_sold', { listingId: result.listingId });
     // Notify the BM seller — queued so offline sellers see it on reconnect
     notifyUser(
       result.sellerId,
@@ -436,10 +448,11 @@ app.post('/api/bm/buy/:id', authMiddleware, (req, res) => {
 });
 
 app.post('/api/bm/cancel/:id', authMiddleware, (req, res) => {
+  const roomId = req.chatId;
   try {
     const result = bmCancelListing(req.tgUser.id, Number(req.params.id));
     io.to(`user:${req.tgUser.id}`).emit('user_update', { newInventory: result.newInventory });
-    io.emit('bm_listing_cancelled', { listingId: result.listingId });
+    io.to(`room:${roomId}`).emit('bm_listing_cancelled', { listingId: result.listingId });
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -448,7 +461,8 @@ app.post('/api/bm/cancel/:id', authMiddleware, (req, res) => {
 
 // ── REST: /api/prompt/active ───────────────────────────────────────────────
 app.get('/api/prompt/active', (req, res) => {
-  const prompt = getActivePrompt();
+  const roomId = Number(req.query.roomId) || 0;
+  const prompt = getActivePrompt(roomId);
   if (!prompt) return res.json({ prompt: null, replies: [] });
   const data = getPromptWithReplies(prompt.id);
   res.json({
@@ -458,10 +472,11 @@ app.get('/api/prompt/active', (req, res) => {
 });
 // ── REST: /api/shop/prompt ───────────────────────────────────────────
 app.post('/api/shop/prompt', authMiddleware, (req, res) => {
+  const roomId = req.chatId;
   try {
-    const result = buyPrompt(req.tgUser.id);
-    // Tell everyone about the new prompt
-    io.emit('new_prompt', {
+    const result = buyPrompt(req.tgUser.id, roomId);
+    // Tell everyone in the room about the new prompt
+    io.to(`room:${roomId}`).emit('new_prompt', {
       id:       result.prompt.id,
       text:     result.prompt.text,
       closesAt: result.prompt.closesAt,
@@ -478,16 +493,18 @@ app.post('/api/shop/prompt', authMiddleware, (req, res) => {
 
 // ── REST: /api/lottery ────────────────────────────────────────────────────
 app.get('/api/lottery/active', (req, res) => {
-  const round = getActiveLottery();
-  if (!round) return res.json({ round: null, carryOver: getCarryOver() });
+  const roomId = Number(req.query.roomId) || 0;
+  const round = getActiveLottery(roomId);
+  if (!round) return res.json({ round: null, carryOver: getCarryOver(roomId) });
   const data = getLotteryWithBets(round.id);
   res.json({ round: data, carryOver: 0 });
 });
 
 app.post('/api/lottery/start', authMiddleware, (req, res) => {
+  const roomId = req.chatId;
   try {
-    const result = startLottery(req.tgUser.id);
-    io.emit('new_lottery', getActiveLottery()); // fetch the just-created round (strips secret_letter)
+    const result = startLottery(req.tgUser.id, roomId);
+    io.to(`room:${roomId}`).emit('new_lottery', getActiveLottery(roomId));
     io.to(`user:${req.tgUser.id}`).emit('user_update', {
       newCoins:  result.newCoins,
       coinDelta: -LOTTERY_START_COST,
@@ -502,8 +519,9 @@ app.post('/api/lottery/start', authMiddleware, (req, res) => {
 app.post('/api/lottery/bet', authMiddleware, (req, res) => {
   try {
     const { roundId, letter } = req.body;
+    const roomId = req.chatId;
     const result = placeBet(req.tgUser.id, roundId, letter);
-    io.emit('lottery_bet_placed', { roundId, bet: result.bet, jackpot: result.jackpot });
+    io.to(`room:${roomId}`).emit('lottery_bet_placed', { roundId, bet: result.bet, jackpot: result.jackpot });
     io.to(`user:${req.tgUser.id}`).emit('user_update', {
       newInventory: result.newInventory,
       newLetters:   [],
@@ -548,10 +566,13 @@ io.use(socketAuth);
 
 io.on('connection', (socket) => {
   const userId = socket.tgUser.id;
-  console.log(`[Socket] Connected: user ${userId}`);
+  const roomId = socket.chatId;
+  console.log(`[Socket] Connected: user ${userId} in room ${roomId}`);
 
   // Join a personal room so per-user notifications work
   socket.join(`user:${userId}`);
+  // Join the group room so room-scoped broadcasts work
+  socket.join(`room:${roomId}`);
 
   // Drain any queued notifications accumulated while the user was offline
   const pending = stmts.getPendingNotifications.all(userId);
@@ -567,12 +588,12 @@ io.on('connection', (socket) => {
   // ── Event: send_message ──────────────────────────────────────────────────
   socket.on('send_message', ({ text }) => {
     try {
-      const result  = processMessage(userId, text);
+      const result  = processMessage(userId, text, roomId);
       const user    = requireUser(userId);
       const payload = buildMessagePayload(user, text, result);
 
-      // Broadcast to ALL connected clients
-      io.emit('new_message', payload);
+      // Broadcast to all connected clients in the same room
+      io.to(`room:${roomId}`).emit('new_message', payload);
 
       // Notify only the sender of their economy update
       socket.emit('user_update', {
@@ -584,19 +605,10 @@ io.on('connection', (socket) => {
         coinDelta:    result.coinDelta,
       });
 
-      // Mirror to Telegram group
-      broadcastToGroup({
-        username:   user.username,
-        first_name: user.first_name,
-        text,
-        coinDelta:  result.coinDelta,
-        tier:       result.tier,
-      }).catch(() => {});
-
       // Heat increase when someone mentions the black market
       if (text.toLowerCase().includes('mercado negro')) {
         const newHeat = addHeat(config.BM_HEAT_CHAT_INCREMENT);
-        io.emit('bm_heat_update', { heat: newHeat, catchProb: catchProbability(newHeat) });
+        io.to(`room:${roomId}`).emit('bm_heat_update', { heat: newHeat, catchProb: catchProbability(newHeat) });
       }
     } catch (err) {
       socket.emit('rejected_message', { reason: err.message });
@@ -604,14 +616,14 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log(`[Socket] Disconnected: user ${userId}`);
+    console.log(`[Socket] Disconnected: user ${userId} (room ${roomId})`);
   });
 
   // ── Event: submit_prompt_reply ───────────────────────────────────────
   socket.on('submit_prompt_reply', ({ promptId, text }) => {
     try {
       const reply = submitReply(userId, promptId, text);
-      io.emit('new_prompt_reply', reply);
+      io.to(`room:${roomId}`).emit('new_prompt_reply', reply);
       socket.emit('user_update', {
         newCoins:   reply.newCoins,
         coinDelta:  reply.replyBonus,
@@ -626,7 +638,7 @@ io.on('connection', (socket) => {
   socket.on('vote_reply', ({ replyId }) => {
     try {
       const result = castVote(userId, replyId);
-      io.emit('vote_update', result);
+      io.to(`room:${roomId}`).emit('vote_update', result);
     } catch (err) {
       socket.emit('prompt_error', { reason: err.message });
     }
@@ -639,8 +651,8 @@ io.on('connection', (socket) => {
     if (now < cooldownUntil) return; // silently rate-limit
     begCooldowns.set(userId, now + BEG_COOLDOWN_SEC * 1000);
     const user = requireUser(userId);
-    // Broadcast to everyone else
-    socket.broadcast.emit('new_beg', {
+    // Broadcast to everyone else in the same room
+    socket.to(`room:${roomId}`).emit('new_beg', {
       userId,
       username:  user.username,
       firstName: user.first_name,
@@ -720,8 +732,8 @@ function notifyUser(userId, text, type = 'info') {
  * as a new_message event so it appears in the chat feed for everyone,
  * including players who reconnect after the fact.
  */
-function broadcastSystemMessage(text) {
-  const result = stmts.insertMessage.run({ userId: 0, text, coinDelta: 0 });
+function broadcastSystemMessage(text, roomId = 0) {
+  const result = stmts.insertMessage.run({ userId: 0, text, coinDelta: 0, roomId });
   const payload = {
     id:        result.lastInsertRowid,
     userId:    0,
@@ -733,7 +745,7 @@ function broadcastSystemMessage(text) {
     tier:      null,
     createdAt: Math.floor(Date.now() / 1000),
   };
-  io.emit('new_message', payload);
+  io.to(`room:${roomId}`).emit('new_message', payload);
 }
 
 // ── Start bot (skipped in dev mode without a real token) ──────────────────
@@ -767,9 +779,8 @@ if (require.main === module) {
 
   setInterval(() => {
     const nowSec = Math.floor(Date.now() / 1000);
-    const active = getActivePrompt();
 
-    // ── Black market catch / expiry check ─────────────────────────────────
+    // ── Black market catch / expiry check (global — heat is shared) ───────
     if (nowSec - lastBmCheckSec >= BM_CHECK_INTERVAL_SEC) {
       lastBmCheckSec = nowSec;
       const { caught, expired, heat: newHeat } = runCatchCheck();
@@ -785,9 +796,10 @@ if (require.main === module) {
           newCoins:  freshSeller.coins,
           coinDelta: -c.fine,
         });
-        // Remove from public listings feed
-        io.emit('bm_listing_cancelled', { listingId: c.listingId });
-        console.log(`[BM] User ${c.sellerId} caught selling "${c.letter}". Fine: ${c.fine}. Heat: ${newHeat}`);
+        // Remove from the room's public listings feed
+        const cRoomId = c.roomId ?? 0;
+        io.to(`room:${cRoomId}`).emit('bm_listing_cancelled', { listingId: c.listingId });
+        console.log(`[BM] User ${c.sellerId} caught selling "${c.letter}" in room ${cRoomId}. Fine: ${c.fine}. Heat: ${newHeat}`);
       }
 
       for (const e of expired) {
@@ -799,79 +811,89 @@ if (require.main === module) {
         io.to(`user:${e.sellerId}`).emit('user_update', {
           newInventory: JSON.parse(freshSeller.inventory_json),
         });
-        io.emit('bm_listing_cancelled', { listingId: e.listingId });
+        const eRoomId = e.roomId ?? 0;
+        io.to(`room:${eRoomId}`).emit('bm_listing_cancelled', { listingId: e.listingId });
       }
 
       if (caught.length > 0 || expired.length > 0) {
+        // Heat is global — broadcast to all rooms that have active BM users
         io.emit('bm_heat_update', { heat: newHeat, catchProb: catchProbability(newHeat) });
       }
     }
 
-    // Close expired lottery round
-    const activeLottery = getActiveLottery();
-    if (activeLottery && nowSec >= activeLottery.closes_at) {
-      const lResult = closeLottery(activeLottery.id);
-      if (lResult) {
-        // Notify each winner of their coins + inventory gain
-        lResult.winners.forEach((w) => {
-          const fresh = requireUser(w.userId);
-          io.to(`user:${w.userId}`).emit('user_update', {
-            newCoins:     fresh.coins,
-            coinDelta:    w.coinsEarned,
-            newInventory: w.newInventory,
-            newLetters:   [],
+    // ── Per-room prompt & lottery checks ──────────────────────────────────
+    const rooms = stmts.getAllRooms.all();
+    for (const room of rooms) {
+      const rid = room.id;
+
+      // Close expired lottery round for this room
+      const activeLottery = getActiveLottery(rid);
+      if (activeLottery && nowSec >= activeLottery.closes_at) {
+        const lResult = closeLottery(activeLottery.id);
+        if (lResult) {
+          lResult.winners.forEach((w) => {
+            const fresh = requireUser(w.userId);
+            io.to(`user:${w.userId}`).emit('user_update', {
+              newCoins:     fresh.coins,
+              coinDelta:    w.coinsEarned,
+              newInventory: w.newInventory,
+              newLetters:   [],
+            });
           });
-        });
-        io.emit('lottery_closed', lResult);
-        // Persist a summary in the chat feed
-        if (lResult.carryOver) {
-          broadcastSystemMessage(
-            `🎲 La letra secreta era «${lResult.secretLetter.toUpperCase()}». Nadie acertó. El bote sube a ${lResult.jackpot} 🪙.`
-          );
-        } else {
-          const names = lResult.winners.map((w) => w.firstName || w.username).join(', ');
-          const prize = lResult.winners[0]?.coinsEarned ?? 0;
-          broadcastSystemMessage(
-            `🎲 La letra secreta era «${lResult.secretLetter.toUpperCase()}». ¡${names} acertó! +${prize} 🪙 y +letras.`
-          );
+          io.to(`room:${rid}`).emit('lottery_closed', lResult);
+          if (lResult.carryOver) {
+            broadcastSystemMessage(
+              `🎲 La letra secreta era «${lResult.secretLetter.toUpperCase()}». Nadie acertó. El bote sube a ${lResult.jackpot} 🪙.`,
+              rid
+            );
+          } else {
+            const names = lResult.winners.map((w) => w.firstName || w.username).join(', ');
+            const prize = lResult.winners[0]?.coinsEarned ?? 0;
+            broadcastSystemMessage(
+              `🎲 La letra secreta era «${lResult.secretLetter.toUpperCase()}». ¡${names} acertó! +${prize} 🪙 y +letras.`,
+              rid
+            );
+          }
+          console.log(`[Lottery] Room ${rid}: closed. Letter: ${lResult.secretLetter}. Winners: ${lResult.winners.map((w) => w.userId).join(', ') || 'none'}`);
         }
-        console.log(`[Lottery] Closed. Letter: ${lResult.secretLetter}. Winners: ${lResult.winners.map((w) => w.userId).join(', ') || 'none'}`);
       }
-    }
 
-    // Close expired prompt
-    if (active && nowSec >= active.closes_at) {
-      const result = closePrompt(active.id);
-      if (result) {
-        io.emit('prompt_closed', result);
-        // Persist a summary in the chat feed
-        if (result.winners && result.winners.length > 0) {
-          const w = result.winners[0];
-          const name = w.firstName || w.username;
-          const runners = result.runnersUp?.length > 0
-            ? ` Sub: ${result.runnersUp.map((r) => r.firstName || r.username).join(', ')}.`
-            : '';
-          broadcastSystemMessage(
-            `🏆 Prompt cerrado: «${result.promptText}». Ganador: ${name} — «${w.text}» (+${w.bonus} 🪙).${runners}`
-          );
-        } else {
-          broadcastSystemMessage(
-            `🏆 Prompt cerrado: «${result.promptText}». Sin respuestas.`
-          );
+      // Close expired prompt for this room
+      const active = getActivePrompt(rid);
+      if (active && nowSec >= active.closes_at) {
+        const result = closePrompt(active.id);
+        if (result) {
+          io.to(`room:${rid}`).emit('prompt_closed', result);
+          if (result.winners && result.winners.length > 0) {
+            const w = result.winners[0];
+            const name = w.firstName || w.username;
+            const runners = result.runnersUp?.length > 0
+              ? ` Sub: ${result.runnersUp.map((r) => r.firstName || r.username).join(', ')}.`
+              : '';
+            broadcastSystemMessage(
+              `🏆 Prompt cerrado: «${result.promptText}». Ganador: ${name} — «${w.text}» (+${w.bonus} 🪙).${runners}`,
+              rid
+            );
+          } else {
+            broadcastSystemMessage(
+              `🏆 Prompt cerrado: «${result.promptText}». Sin respuestas.`,
+              rid
+            );
+          }
+          const winnerNames = result.winners?.map((w) => w.userId).join(', ') || 'none';
+          console.log(`[Prompt] Room ${rid}: closed "${active.text}". Winners: ${winnerNames}`);
         }
-        const winnerNames = result.winners?.map((w) => w.userId).join(', ') || 'none';
-        console.log(`[Prompt] Closed "${active.text}". Winners: ${winnerNames}`);
       }
-    }
 
-    // Inactivity trigger: no active prompt + chat silent ≥ 24 h
-    if (!active) {
-      const lastMsg   = stmts.getLastMessageTime.get();
-      const silentSec = lastMsg?.ts ? nowSec - lastMsg.ts : Infinity;
-      if (silentSec >= INACTIVITY_SEC) {
-        const np = startPrompt();
-        io.emit('new_prompt', { id: np.id, text: np.text, closesAt: np.closesAt });
-        console.log('[Prompt] Inactivity trigger (24 h silence).');
+      // Inactivity trigger: no active prompt + room silent ≥ 24 h
+      if (!active) {
+        const lastMsg   = stmts.getLastMessageTime.get(rid);
+        const silentSec = lastMsg?.ts ? nowSec - lastMsg.ts : Infinity;
+        if (silentSec >= INACTIVITY_SEC) {
+          const np = startPrompt(rid);
+          io.to(`room:${rid}`).emit('new_prompt', { id: np.id, text: np.text, closesAt: np.closesAt });
+          console.log(`[Prompt] Room ${rid}: inactivity trigger (24 h silence).`);
+        }
       }
     }
   }, 15_000);

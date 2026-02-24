@@ -13,20 +13,21 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
  *   socket    – Socket.io client instance (or null)
  *   myUserId  – current user's TG id (number)
  */
-export default function ChatFeed({ socket, myUserId }) {
+export default function ChatFeed({ socket, myUserId, chatId = 0 }) {
   const [messages, setMessages] = useState([]);
   const [loading,  setLoading]  = useState(true);
   const bottomRef = useRef(null);
   const atBottomRef = useRef(true);
 
-  // ── Hydrate recent messages from REST ──────────────────────────────────
+  // ── Hydrate recent messages from REST ────────────────────────────────────
   useEffect(() => {
-    fetch(`${BACKEND_URL}/api/messages?limit=50`)
+    const roomQ = chatId ? `&roomId=${chatId}` : '';
+    fetch(`${BACKEND_URL}/api/messages?limit=50${roomQ}`)
       .then((r) => r.json())
       .then((data) => setMessages(Array.isArray(data) ? data : []))
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+  }, [chatId]);
 
   // ── Listen for real-time messages ───────────────────────────────────────
   useEffect(() => {

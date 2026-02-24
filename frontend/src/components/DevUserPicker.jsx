@@ -8,11 +8,15 @@ import React, { useState } from 'react';
  * simulate multi-user interactions in the same browser with different tabs/windows.
  *
  * Generates dev initData tokens in the format expected by the backend:
- *   dev:USER_ID:username:First Name
+ *   dev:USER_ID:username:First Name:CHAT_ID:Chat Title
  *
  * Props:
  *   onSelect – (initData: string) => void
  */
+
+// Default dev room shared by all preset users
+const DEFAULT_CHAT_ID    = -1001001;
+const DEFAULT_CHAT_TITLE = 'Dev Room';
 
 const PRESET_USERS = [
   { id: 1001, username: 'alice',   firstName: 'Alice',   color: 'bg-blue-500'   },
@@ -21,12 +25,12 @@ const PRESET_USERS = [
   { id: 1004, username: 'diana',   firstName: 'Diana',   color: 'bg-rose-500'   },
 ];
 
-function makeDevToken({ id, username, firstName }) {
-  return `dev:${id}:${username}:${firstName}`;
+function makeDevToken({ id, username, firstName, chatId = DEFAULT_CHAT_ID, chatTitle = DEFAULT_CHAT_TITLE }) {
+  return `dev:${id}:${username}:${firstName}:${chatId}:${chatTitle}`;
 }
 
 export default function DevUserPicker({ onSelect }) {
-  const [custom, setCustom]   = useState({ id: '', username: '', firstName: '' });
+  const [custom, setCustom]   = useState({ id: '', username: '', firstName: '', chatId: String(DEFAULT_CHAT_ID), chatTitle: DEFAULT_CHAT_TITLE });
   const [error,  setError]    = useState('');
 
   function handleCustom() {
@@ -34,8 +38,10 @@ export default function DevUserPicker({ onSelect }) {
     if (!id || id <= 0) { setError('El ID de usuario debe ser un número positivo'); return; }
     if (!custom.username.trim()) { setError('El nombre de usuario es obligatorio'); return; }
     if (!custom.firstName.trim()) { setError('El nombre es obligatorio'); return; }
+    const chatId = parseInt(custom.chatId, 10) || DEFAULT_CHAT_ID;
+    const chatTitle = custom.chatTitle.trim() || DEFAULT_CHAT_TITLE;
     setError('');
-    onSelect(makeDevToken({ id, username: custom.username.trim(), firstName: custom.firstName.trim() }));
+    onSelect(makeDevToken({ id, username: custom.username.trim(), firstName: custom.firstName.trim(), chatId, chatTitle }));
   }
 
   return (
@@ -49,6 +55,7 @@ export default function DevUserPicker({ onSelect }) {
         <p className="text-sm text-tg-hint">
           Sin sesión de Telegram detectada. Elige un usuario o introduce datos personalizados para simular un jugador.
           Abre varias pestañas con distintos usuarios para probar la economía multi-jugador.
+          Todos los usuarios predefinidos comparten la misma sala de desarrollo ({DEFAULT_CHAT_ID}).
         </p>
       </div>
 
@@ -95,6 +102,20 @@ export default function DevUserPicker({ onSelect }) {
             placeholder="Nombre  (ej. Mallory)"
             value={custom.firstName}
             onChange={(e) => setCustom((p) => ({ ...p, firstName: e.target.value }))}
+            className="w-full bg-tg-bg-sec rounded-lg px-3 py-2 text-sm text-tg-text placeholder-tg-hint outline-none"
+          />
+          <input
+            type="number"
+            placeholder={`ID de sala  (ej. ${DEFAULT_CHAT_ID})`}
+            value={custom.chatId}
+            onChange={(e) => setCustom((p) => ({ ...p, chatId: e.target.value }))}
+            className="w-full bg-tg-bg-sec rounded-lg px-3 py-2 text-sm text-tg-text placeholder-tg-hint outline-none"
+          />
+          <input
+            type="text"
+            placeholder="Nombre de sala  (ej. Dev Room)"
+            value={custom.chatTitle}
+            onChange={(e) => setCustom((p) => ({ ...p, chatTitle: e.target.value }))}
             className="w-full bg-tg-bg-sec rounded-lg px-3 py-2 text-sm text-tg-text placeholder-tg-hint outline-none"
           />
         </div>

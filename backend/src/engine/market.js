@@ -39,7 +39,7 @@ function isValidInventoryKey(key) {
  */
 function makeMarket(s, commission = 0) {
 
-  function listLetter(sellerId, letter, price) {
+  function listLetter(sellerId, letter, price, roomId = 0) {
     requireUser(sellerId);
     if (!isValidInventoryKey(letter)) throw new Error(`Letra inválida: "${letter}".`);
     const priceInt = Math.floor(Number(price));
@@ -54,7 +54,7 @@ function makeMarket(s, commission = 0) {
       inv[letter] = current - 1;
       if (inv[letter] === 0) delete inv[letter];
       stmts.updateInventory.run(JSON.stringify(inv), sellerId);
-      const result = s.insert.run(sellerId, letter, priceInt);
+      const result = s.insert.run(sellerId, letter, priceInt, roomId);
       return { listingId: result.lastInsertRowid, letter, price: priceInt, newInventory: inv };
     })();
   }
@@ -109,8 +109,8 @@ function makeMarket(s, commission = 0) {
     })();
   }
 
-  function getOpenListings()         { return s.getOpen.all();        }
-  function getUserListings(userId)   { return s.getUserList.all(userId); }
+  function getOpenListings(roomId = 0)         { return s.getOpen.all(roomId);            }
+  function getUserListings(userId, roomId = 0) { return s.getUserList.all(userId, roomId); }
 
   return { listLetter, buyListing, cancelListing, getOpenListings, getUserListings };
 }

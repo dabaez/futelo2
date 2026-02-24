@@ -98,7 +98,7 @@ db.exec(`
 // Migrations never need to be run manually — they apply automatically on startup.
 //
 // IMPORTANT: never edit a past migration. Always append a new one.
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 const migrations = [
   // ── v1: P2P letter market ─────────────────────────────────────────────────
@@ -222,7 +222,53 @@ const migrations = [
   // not affected by the mining economy.
   () => {
     db.exec('ALTER TABLE users ADD COLUMN pickaxe_hits INTEGER NOT NULL DEFAULT 0');
-  },];
+  },
+
+  // ── v8: Multi-room support — one room per Telegram group ──────────────────
+  // Each Telegram group that adds the bot gets a separate room. All content
+  // (messages, prompts, lottery, market listings) is scoped to a room_id.
+  // Existing rows are assigned to room 0 ("Global") for backward compat.
+  // Per-room streak state moves from users.streak_count to room_member_streaks
+  // (users.streak_count stays but is no longer written after this migration).
+  () => {
+    db.exec(`
+      -- Room registry: one row per Telegram group
+      CREATE TABLE IF NOT EXISTS rooms (
+        id         INTEGER PRIMARY KEY,   -- Telegram chat_id (negative for groups)
+        title      TEXT    NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+      );
+      -- Backward-compat placeholder: all pre-migration content belongs here
+      INSERT OR IGNORE INTO rooms (id, title) VALUES (0, 'Global');
+
+      -- Per-room streak counter (replaces users.streak_count for new messages)
+      CREATE TABLE IF NOT EXISTS room_member_streaks (
+        room_id  INTEGER NOT NULL REFERENCES rooms(id),
+        user_id  INTEGER NOT NULL REFERENCES users(id),
+        streak   INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (room_id, user_id)
+      );
+
+      -- Scope messages to a room
+      ALTER TABLE messages              ADD COLUMN room_id INTEGER NOT NULL DEFAULT 0;
+      -- Scope prompts to a room
+      ALTER TABLE prompts               ADD COLUMN room_id INTEGER NOT NULL DEFAULT 0;
+      -- Scope lottery rounds to a room
+      ALTER TABLE lottery_rounds        ADD COLUMN room_id INTEGER NOT NULL DEFAULT 0;
+      -- Scope P2P market listings to a room
+      ALTER TABLE market_listings       ADD COLUMN room_id INTEGER NOT NULL DEFAULT 0;
+      -- Scope black market listings to a room
+      ALTER TABLE black_market_listings ADD COLUMN room_id INTEGER NOT NULL DEFAULT 0;
+
+      -- Indexes for room-based queries
+      CREATE INDEX IF NOT EXISTS idx_messages_room   ON messages(room_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_prompts_room    ON prompts(room_id, closed);
+      CREATE INDEX IF NOT EXISTS idx_lr_room_status  ON lottery_rounds(room_id, status);
+      CREATE INDEX IF NOT EXISTS idx_ml_room         ON market_listings(room_id, status);
+      CREATE INDEX IF NOT EXISTS idx_bml_room        ON black_market_listings(room_id, status);
+    `);
+  },
+];
 
 // Apply any pending migrations inside a single transaction so a crash mid-way
 // leaves the DB at the last successfully completed version.
@@ -261,12 +307,13 @@ const stmts = {
   `),
   getState:       db.prepare('SELECT value FROM game_state WHERE key = ?'),
   setState:       db.prepare('INSERT OR REPLACE INTO game_state (key, value) VALUES (?, ?)'),
-  insertMessage:  db.prepare('INSERT INTO messages (user_id, text, coin_delta) VALUES (@userId, @text, @coinDelta)'),
+  insertMessage:  db.prepare('INSERT INTO messages (user_id, text, coin_delta, room_id) VALUES (@userId, @text, @coinDelta, @roomId)'),
   getRecentMessages: db.prepare(`
     SELECT m.id, m.text, m.coin_delta, m.created_at,
            u.id AS user_id, u.username, u.first_name, u.photo_url
     FROM messages m
     JOIN users u ON u.id = m.user_id
+    WHERE m.room_id = ?
     ORDER BY m.created_at DESC, m.id DESC
     LIMIT ?
   `),
@@ -276,11 +323,11 @@ const stmts = {
   getUserMessageCount: db.prepare('SELECT COUNT(*) AS cnt FROM messages WHERE user_id = ?'),
 
   // ── Prompts ──────────────────────────────────────────────────────────────
-  getLastMessageTime: db.prepare('SELECT MAX(created_at) AS ts FROM messages'),
-  insertPrompt:      db.prepare('INSERT INTO prompts (text, closes_at) VALUES (?, ?)'),
+  getLastMessageTime: db.prepare('SELECT MAX(created_at) AS ts FROM messages WHERE room_id = ?'),
+  insertPrompt:      db.prepare('INSERT INTO prompts (text, closes_at, room_id) VALUES (?, ?, ?)'),
   getPromptById:     db.prepare('SELECT * FROM prompts WHERE id = ?'),
-  getActivePrompt:   db.prepare('SELECT * FROM prompts WHERE closed = 0 ORDER BY id DESC LIMIT 1'),
-  getLastPrompt:     db.prepare('SELECT * FROM prompts ORDER BY id DESC LIMIT 1'),
+  getActivePrompt:   db.prepare('SELECT * FROM prompts WHERE closed = 0 AND room_id = ? ORDER BY id DESC LIMIT 1'),
+  getLastPrompt:     db.prepare('SELECT * FROM prompts WHERE room_id = ? ORDER BY id DESC LIMIT 1'),
   closePrompt:       db.prepare('UPDATE prompts SET closed = 1 WHERE id = ?'),
   insertPromptReply: db.prepare('INSERT OR IGNORE INTO prompt_replies (prompt_id, user_id, text) VALUES (?, ?, ?)'),
   getPromptReplyById:db.prepare('SELECT * FROM prompt_replies WHERE id = ?'),
@@ -302,7 +349,7 @@ const stmts = {
 
   // ── P2P market listings ───────────────────────────────────────────────────
   insertMarketListing:   db.prepare(
-    'INSERT INTO market_listings (seller_id, letter, price) VALUES (?, ?, ?)'
+    'INSERT INTO market_listings (seller_id, letter, price, room_id) VALUES (?, ?, ?, ?)'
   ),
   getMarketListing:      db.prepare('SELECT * FROM market_listings WHERE id = ?'),
   getOpenMarketListings: db.prepare(`
@@ -310,22 +357,22 @@ const stmts = {
            u.username AS seller_username, u.first_name AS seller_first_name
     FROM market_listings ml
     JOIN users u ON u.id = ml.seller_id
-    WHERE ml.status = 'open'
+    WHERE ml.status = 'open' AND ml.room_id = ?
     ORDER BY ml.listed_at ASC
   `),
   getActiveSellerListing: db.prepare(
-    "SELECT * FROM market_listings WHERE seller_id = ? AND letter = ? AND status = 'open'"
+    "SELECT * FROM market_listings WHERE seller_id = ? AND letter = ? AND status = 'open' AND room_id = ?"
   ),
   resolveMarketListing:  db.prepare(
     'UPDATE market_listings SET status = ?, buyer_id = ?, resolved_at = ? WHERE id = ?'
   ),
   getUserMarketListings: db.prepare(
-    "SELECT * FROM market_listings WHERE seller_id = ? ORDER BY listed_at DESC LIMIT 20"
+    "SELECT * FROM market_listings WHERE seller_id = ? AND room_id = ? ORDER BY listed_at DESC LIMIT 20"
   ),
 
   // ── Black market listings ──────────────────────────────────────────────────
   insertBmListing:  db.prepare(
-    'INSERT INTO black_market_listings (seller_id, letter, price) VALUES (?, ?, ?)'
+    'INSERT INTO black_market_listings (seller_id, letter, price, room_id) VALUES (?, ?, ?, ?)'
   ),
   getBmListing:     db.prepare('SELECT * FROM black_market_listings WHERE id = ?'),
   getOpenBmListings: db.prepare(`
@@ -333,27 +380,31 @@ const stmts = {
            u.username AS seller_username, u.first_name AS seller_first_name
     FROM black_market_listings bml
     JOIN users u ON u.id = bml.seller_id
-    WHERE bml.status = 'open'
+    WHERE bml.status = 'open' AND bml.room_id = ?
     ORDER BY bml.listed_at ASC
   `),
   resolveBmListing: db.prepare(
     'UPDATE black_market_listings SET status = ?, buyer_id = ?, resolved_at = ? WHERE id = ?'
   ),
   getUserBmListings: db.prepare(
-    "SELECT * FROM black_market_listings WHERE seller_id = ? ORDER BY listed_at DESC LIMIT 20"
+    "SELECT * FROM black_market_listings WHERE seller_id = ? AND room_id = ? ORDER BY listed_at DESC LIMIT 20"
   ),
-  // Full rows (no JOIN) used by the heat engine's catch check loop
+  // Full rows (no JOIN) used by the heat engine's catch check loop — scoped to room
   getAllOpenBmListings: db.prepare(
+    "SELECT * FROM black_market_listings WHERE status = 'open' AND room_id = ? ORDER BY listed_at ASC"
+  ),
+  // Used by the scheduler catch-check which processes ALL rooms in one pass
+  getAllOpenBmListingsGlobal: db.prepare(
     "SELECT * FROM black_market_listings WHERE status = 'open' ORDER BY listed_at ASC"
   ),
 
   // ── Lottery ───────────────────────────────────────────────────────────────
   insertLotteryRound:   db.prepare(
-    'INSERT INTO lottery_rounds (secret_letter, jackpot, started_by, closes_at) VALUES (?, ?, ?, ?)'
+    'INSERT INTO lottery_rounds (secret_letter, jackpot, started_by, closes_at, room_id) VALUES (?, ?, ?, ?, ?)'
   ),
   getLotteryRoundById:  db.prepare('SELECT * FROM lottery_rounds WHERE id = ?'),
   getActiveLotteryRound: db.prepare(
-    "SELECT * FROM lottery_rounds WHERE status = 'active' ORDER BY id DESC LIMIT 1"
+    "SELECT * FROM lottery_rounds WHERE status = 'active' AND room_id = ? ORDER BY id DESC LIMIT 1"
   ),
   closeLotteryRound:    db.prepare("UPDATE lottery_rounds SET status = 'closed' WHERE id = ?"),
   addJackpotToRound:    db.prepare('UPDATE lottery_rounds SET jackpot = jackpot + ? WHERE id = ?'),
@@ -400,6 +451,23 @@ const stmts = {
   pruneOldNotifications: db.prepare(
     'DELETE FROM notifications WHERE delivered = 1 AND created_at < ?'
   ),
+
+  // ── Rooms ─────────────────────────────────────────────────────────────────
+  upsertRoom: db.prepare(`
+    INSERT INTO rooms (id, title) VALUES (?, ?)
+    ON CONFLICT(id) DO UPDATE SET title = excluded.title
+  `),
+  getRoomById: db.prepare('SELECT * FROM rooms WHERE id = ?'),
+  getAllRooms: db.prepare('SELECT id, title FROM rooms WHERE id != 0 ORDER BY created_at ASC'),
+
+  // ── Per-room streak tracking ───────────────────────────────────────────────
+  getRoomStreak: db.prepare(
+    'SELECT streak FROM room_member_streaks WHERE room_id = ? AND user_id = ?'
+  ),
+  upsertRoomStreak: db.prepare(`
+    INSERT INTO room_member_streaks (room_id, user_id, streak) VALUES (?, ?, ?)
+    ON CONFLICT(room_id, user_id) DO UPDATE SET streak = excluded.streak
+  `),
 };
 
 /**
@@ -419,4 +487,23 @@ function requireUser(userId) {
   return user;
 }
 
-module.exports = { db, stmts, upsertUser, requireUser };
+/**
+ * Upsert a room (Telegram group) and return it.
+ * @param {number} id     Telegram chat_id (negative for groups/supergroups)
+ * @param {string} title  Group title
+ */
+function upsertRoom(id, title = '') {
+  stmts.upsertRoom.run(id, title);
+  return stmts.getRoomById.get(id);
+}
+
+/**
+ * Return the room or throw if not found.
+ */
+function requireRoom(roomId) {
+  const room = stmts.getRoomById.get(roomId);
+  if (!room) throw new Error(`Room ${roomId} not found.`);
+  return room;
+}
+
+module.exports = { db, stmts, upsertUser, requireUser, upsertRoom, requireRoom };

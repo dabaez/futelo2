@@ -28,6 +28,7 @@ export default function BlackMarketModal({
   isOpen,
   onClose,
   initData,
+  chatId = 0,
   coins,
   inventory,
   onPurchase,
@@ -72,10 +73,11 @@ export default function BlackMarketModal({
   // ── Fetch data when tab or modal changes ──────────────────────────────
   useEffect(() => {
     if (!isOpen) return;
+    const roomQ = chatId ? `?roomId=${chatId}` : '';
     if (activeTab === 'buy') {
       setLoadingListings(true);
       setBuyError(null);
-      fetch('/api/bm/listings')
+      fetch(`/api/bm/listings${roomQ}`)
         .then(safeJson)
         .then((d) => setOpenListings(Array.isArray(d) ? d : []))
         .catch(() => setBuyError('Error al cargar los listados.'))
@@ -83,7 +85,7 @@ export default function BlackMarketModal({
     }
     if (activeTab === 'sell') {
       setLoadingMine(true);
-      fetch('/api/bm/my-listings', {
+      fetch(`/api/bm/my-listings${roomQ}`, {
         headers: initData ? { 'x-init-data': initData } : {},
       })
         .then(safeJson)
@@ -91,7 +93,7 @@ export default function BlackMarketModal({
         .catch(() => {})
         .finally(() => setLoadingMine(false));
     }
-  }, [isOpen, activeTab, initData]);
+  }, [isOpen, activeTab, initData, chatId]);
 
   // ── Socket: live BM market updates ───────────────────────────────────
   useEffect(() => {
@@ -184,7 +186,8 @@ export default function BlackMarketModal({
       if (!r.ok) throw new Error(data?.error || 'Error al listar.');
       onPurchase?.(data);
       // Refresh my listings
-      const res2 = await fetch('/api/bm/my-listings', {
+      const roomQ = chatId ? `?roomId=${chatId}` : '';
+      const res2 = await fetch(`/api/bm/my-listings${roomQ}`, {
         headers: initData ? { 'x-init-data': initData } : {},
       });
       const mine = await safeJson(res2);
@@ -196,7 +199,7 @@ export default function BlackMarketModal({
     } finally {
       setListing(false);
     }
-  }, [selectedLetter, listing, listingPrice, maxPrice, initData, onPurchase]);
+  }, [selectedLetter, listing, listingPrice, maxPrice, initData, onPurchase, chatId]);
 
   // ── Cancel ────────────────────────────────────────────────────────────
   const handleCancel = useCallback(async (listingId) => {

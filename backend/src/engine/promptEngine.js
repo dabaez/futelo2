@@ -33,8 +33,8 @@ const RUNNER_UP_BONUS = PROMPT_RUNNER_UP_BONUS;
 /**
  * Pick a prompt that hasn't appeared recently (last 5 prompts are avoided).
  */
-function pickNextPrompt() {
-  const used   = db.prepare('SELECT text FROM prompts ORDER BY id DESC LIMIT 5').all().map((r) => r.text);
+function pickNextPrompt(roomId = 0) {
+  const used   = db.prepare('SELECT text FROM prompts WHERE room_id = ? ORDER BY id DESC LIMIT 5').all(roomId).map((r) => r.text);
   const pool   = PROMPT_POOL.filter((p) => !used.includes(p));
   const source = pool.length > 0 ? pool : PROMPT_POOL;
   return source[Math.floor(Math.random() * source.length)];
@@ -44,10 +44,10 @@ function pickNextPrompt() {
  * Start a new prompt. Returns { id, text, closesAt }.
  * Caller is responsible for emitting the socket event.
  */
-function startPrompt() {
-  const text     = pickNextPrompt();
+function startPrompt(roomId = 0) {
+  const text     = pickNextPrompt(roomId);
   const closesAt = Math.floor(Date.now() / 1000) + PROMPT_DURATION_SEC;
-  const result   = stmts.insertPrompt.run(text, closesAt);
+  const result   = stmts.insertPrompt.run(text, closesAt, roomId);
   return { id: result.lastInsertRowid, text, closesAt };
 }
 
@@ -55,10 +55,10 @@ function startPrompt() {
  * Buy and immediately fire a new prompt.
  * Costs PROMPT_BUY_COST coins. Fails if a prompt is already active.
  */
-function buyPrompt(userId) {
+function buyPrompt(userId, roomId = 0) {
   requireUser(userId);
 
-  if (getActivePrompt()) {
+  if (getActivePrompt(roomId)) {
     throw new Error('Ya hay un prompt activo. Espera a que termine.');
   }
 
@@ -68,7 +68,7 @@ function buyPrompt(userId) {
       throw new Error(`Monedas insuficientes. Necesitas ${PROMPT_BUY_COST} 🪙, tienes ${user.coins}.`);
     }
     stmts.updateCoins.run(-PROMPT_BUY_COST, userId);
-    const np = startPrompt();
+    const np = startPrompt(roomId);
     return {
       newCoins: user.coins - PROMPT_BUY_COST,
       prompt:   np,
@@ -77,10 +77,10 @@ function buyPrompt(userId) {
 }
 
 /**
- * Returns the single active (non-closed) prompt, or null.
+ * Returns the single active (non-closed) prompt for a room, or null.
  */
-function getActivePrompt() {
-  return stmts.getActivePrompt.get() || null;
+function getActivePrompt(roomId = 0) {
+  return stmts.getActivePrompt.get(roomId) || null;
 }
 
 /**

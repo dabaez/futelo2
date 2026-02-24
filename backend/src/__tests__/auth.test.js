@@ -44,7 +44,7 @@ function buildValidInitData(botToken, userPayload = {}) {
 // ── validateInitDataDev ───────────────────────────────────────────────────────
 describe('validateInitDataDev', () => {
   test('parses a valid dev token', () => {
-    const user = validateInitDataDev('dev:1001:alice:Alice');
+    const { user } = validateInitDataDev('dev:1001:alice:Alice');
     expect(user.id).toBe(1001);
     expect(user.username).toBe('alice');
     expect(user.first_name).toBe('Alice');
@@ -52,7 +52,7 @@ describe('validateInitDataDev', () => {
   });
 
   test('allows colons inside the first name', () => {
-    const user = validateInitDataDev('dev:99:bob:Bob: The Builder');
+    const { user } = validateInitDataDev('dev:99:bob:Bob: The Builder');
     expect(user.first_name).toBe('Bob: The Builder');
   });
 
@@ -69,6 +69,30 @@ describe('validateInitDataDev', () => {
   test('throws when the token has fewer than 4 colon-separated parts', () => {
     expect(() => validateInitDataDev('dev:1001:alice')).toThrow();
   });
+
+  test('returns default chatId -1001 when no chat fields provided', () => {
+    const { chatId, chatTitle } = validateInitDataDev('dev:1001:alice:Alice');
+    expect(chatId).toBe(-1001);
+    expect(chatTitle).toBe('Dev Room');
+  });
+
+  test('parses chatId and chatTitle when provided', () => {
+    const { user, chatId, chatTitle } = validateInitDataDev('dev:1001:alice:Alice:-1001001:Futelo Group');
+    expect(user.first_name).toBe('Alice');
+    expect(chatId).toBe(-1001001);
+    expect(chatTitle).toBe('Futelo Group');
+  });
+
+  test('chatTitle can contain colons', () => {
+    const { chatTitle } = validateInitDataDev('dev:1001:alice:Alice:-1001:My Group: Test');
+    expect(chatTitle).toBe('My Group: Test');
+  });
+
+  test('first name with colons does not interfere with chat fields', () => {
+    const { user, chatId } = validateInitDataDev('dev:99:bob:Bob: The Builder:-2000:Some Group');
+    expect(user.first_name).toBe('Bob: The Builder');
+    expect(chatId).toBe(-2000);
+  });
 });
 
 // ── validateInitData – real HMAC path ─────────────────────────────────────────
@@ -82,7 +106,7 @@ describe('validateInitData – HMAC validation', () => {
 
   test('accepts correctly signed initData and returns the user object', () => {
     const raw  = buildValidInitData(BOT_TOKEN, { id: 42, username: 'tester' });
-    const user = validateInitData(raw, BOT_TOKEN);
+    const { user } = validateInitData(raw, BOT_TOKEN);
     expect(user.id).toBe(42);
     expect(user.username).toBe('tester');
   });
@@ -116,9 +140,19 @@ describe('validateInitData – dev token passthrough (DEV_MODE=true)', () => {
   afterEach(()  => { delete process.env.DEV_MODE; });
 
   test('accepts a dev: token when DEV_MODE is true', () => {
-    const user = validateInitData('dev:7:charlie:Charlie', 'any_token');
+    const { user } = validateInitData('dev:7:charlie:Charlie', 'any_token');
     expect(user.id).toBe(7);
     expect(user.username).toBe('charlie');
+  });
+
+  test('returns chatId from dev token', () => {
+    const { chatId } = validateInitData('dev:7:charlie:Charlie:-1002:Test Group', 'any_token');
+    expect(chatId).toBe(-1002);
+  });
+
+  test('returns default chatId -1001 from dev token without chat fields', () => {
+    const { chatId } = validateInitData('dev:7:charlie:Charlie', 'any_token');
+    expect(chatId).toBe(-1001);
   });
 
   test('rejects a dev: token when DEV_MODE is NOT true', () => {

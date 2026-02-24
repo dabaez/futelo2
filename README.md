@@ -46,7 +46,9 @@ Open [http://localhost:5173](http://localhost:5173) in a browser.
 
 ### Testing Without Telegram
 
-When `DEV_MODE=true` and you open the app in a plain browser, a **Dev User Picker** screen appears. Pick a user to log in without a Telegram account. Open a second tab and pick a different user to simulate two players chatting.
+When `DEV_MODE=true` and you open the app in a plain browser, a **Dev User Picker** screen appears. Preset users (Alice, Bob, etc.) all share a default **Dev Room** (`-1001`). Open a second tab and pick a different user to simulate two players chatting.
+
+The custom user form also accepts a **Chat ID** and **Chat Title** to test multi-room isolation — enter different chat IDs to put users in separate rooms.
 
 > ⚠️  Never set `DEV_MODE=true` in production — it completely bypasses Telegram authentication.
 
@@ -68,8 +70,10 @@ Requires:
 
 1. Create a bot via [@BotFather](https://t.me/BotFather).
 2. In BotFather, set the Mini App URL: `/newapp` → point to `https://your-domain.com`.
-3. Add the bot to your Telegram group as **Admin** with "Delete messages" permission.
+3. Add the bot to **any Telegram group** as **Admin** with "Delete messages" permission. Each group automatically gets its own isolated room — prompts, market listings, lottery rounds, and chat streaks are all per-group.
 4. Set `BOT_MODE=webhook` and `WEBHOOK_DOMAIN=https://your-domain.com` in `.env`.
+
+> `GROUP_CHAT_ID` is **not required**. The bot handles all groups it is a member of automatically.
 
 ---
 
@@ -162,6 +166,6 @@ Las alertas por usuario (p.ej. "tu letra se vendió") se **persisten en la DB**.
 ## Tests
 
 ```bash
-cd backend && npm test   # Jest + supertest  (118 tests, 5 suites)
+cd backend && npm test   # Jest + supertest  (150 tests, 6 suites)
 cd frontend && npm test  # Vitest + Testing Library  (35 tests, 2 suites)
 ```

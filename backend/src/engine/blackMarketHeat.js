@@ -117,7 +117,7 @@ function catchProbability(heat) {
  */
 function runCatchCheck() {
   const nowSec   = Math.floor(Date.now() / 1000);
-  const listings = stmts.getAllOpenBmListings.all();
+  const listings = stmts.getAllOpenBmListingsGlobal.all();
   if (listings.length === 0) {
     return { caught: [], expired: [], heat: getCurrentHeat() };
   }
@@ -141,13 +141,13 @@ function runCatchCheck() {
           stmts.updateInventory.run(JSON.stringify(inv), listing.seller_id);
         }
         stmts.resolveBmListing.run('expired', null, nowSec, listing.id);
-        expired.push({ sellerId: listing.seller_id, letter: listing.letter, listingId: listing.id });
+        expired.push({ sellerId: listing.seller_id, letter: listing.letter, listingId: listing.id, roomId: listing.room_id });
 
       } else if (Math.random() < prob) {
         // ── Caught: fine the seller, letter is forfeited ──────────────────
         stmts.updateCoins.run(-BM_CATCH_FINE, listing.seller_id);
         stmts.resolveBmListing.run('caught', null, nowSec, listing.id);
-        caught.push({ sellerId: listing.seller_id, letter: listing.letter, fine: BM_CATCH_FINE, listingId: listing.id });
+        caught.push({ sellerId: listing.seller_id, letter: listing.letter, fine: BM_CATCH_FINE, listingId: listing.id, roomId: listing.room_id });
       }
     }
   })();

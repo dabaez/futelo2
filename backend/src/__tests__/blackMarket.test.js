@@ -9,13 +9,13 @@
 
 // ── Mock the DB layer ─────────────────────────────────────────────────────────
 const mockStmts = {
-  getState:             { get: jest.fn() },
-  setState:             { run: jest.fn() },
-  getAllOpenBmListings:  { all: jest.fn() },
-  resolveBmListing:     { run: jest.fn() },
-  updateCoins:          { run: jest.fn() },
-  updateInventory:      { run: jest.fn() },
-  getUser:              { get: jest.fn() },
+  getState:                      { get: jest.fn() },
+  setState:                      { run: jest.fn() },
+  getAllOpenBmListingsGlobal:     { all: jest.fn() },
+  resolveBmListing:              { run: jest.fn() },
+  updateCoins:                   { run: jest.fn() },
+  updateInventory:               { run: jest.fn() },
+  getUser:                       { get: jest.fn() },
 };
 
 jest.mock('../db/database', () => ({
@@ -162,7 +162,7 @@ describe('catchProbability', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('runCatchCheck', () => {
   test('returns empty arrays and current heat when no open listings', () => {
-    stmts.getAllOpenBmListings.all.mockReturnValue([]);
+    stmts.getAllOpenBmListingsGlobal.all.mockReturnValue([]);
     const result = runCatchCheck();
     expect(result.caught).toEqual([]);
     expect(result.expired).toEqual([]);
@@ -174,7 +174,7 @@ describe('runCatchCheck', () => {
     const listing = makeListing({ id: 5, seller_id: 10, letter: 'b', listed_at: oldListedAt });
     const seller  = makeUser({ id: 10, inventory_json: JSON.stringify({ b: 1 }) });
 
-    stmts.getAllOpenBmListings.all.mockReturnValue([listing]);
+    stmts.getAllOpenBmListingsGlobal.all.mockReturnValue([listing]);
     stmts.getUser.get.mockReturnValue(seller);
 
     const result = runCatchCheck();
@@ -197,7 +197,7 @@ describe('runCatchCheck', () => {
   test('catches a seller when Math.random is below catch probability', () => {
     const listing = makeListing({ id: 7, seller_id: 20, letter: 'c' });
 
-    stmts.getAllOpenBmListings.all.mockReturnValue([listing]);
+    stmts.getAllOpenBmListingsGlobal.all.mockReturnValue([listing]);
     // Force catch: Math.random returns a value below any catch probability
     jest.spyOn(Math, 'random').mockReturnValue(0);
 
@@ -221,7 +221,7 @@ describe('runCatchCheck', () => {
 
   test('does not catch seller when Math.random is above catch probability', () => {
     const listing = makeListing({ id: 8, seller_id: 30, letter: 'd' });
-    stmts.getAllOpenBmListings.all.mockReturnValue([listing]);
+    stmts.getAllOpenBmListingsGlobal.all.mockReturnValue([listing]);
     // Force no catch: Math.random returns 1 (above any probability)
     jest.spyOn(Math, 'random').mockReturnValue(1);
 
@@ -240,7 +240,7 @@ describe('runCatchCheck', () => {
       makeListing({ id: 1, seller_id: 11, letter: 'e' }),
       makeListing({ id: 2, seller_id: 12, letter: 'f' }),
     ];
-    stmts.getAllOpenBmListings.all.mockReturnValue(listings);
+    stmts.getAllOpenBmListingsGlobal.all.mockReturnValue(listings);
     jest.spyOn(Math, 'random').mockReturnValue(0); // always caught
 
     const result = runCatchCheck();

@@ -4,52 +4,78 @@
  * Futelo – grammY Bot
  * ───────────────────
  * Responsibilities:
- *   1. /start  → registers the user in SQLite → replies with Mini App button
- *   2. Gatekeeper → deletes every non-bot message sent directly in the group
- *   3. Mirror  → exposes broadcastToGroup() so the Socket.io server can
- *                forward validated Futelo messages as a read-only feed
+ *   1. /start  → registers the user + group in SQLite → replies with Mini App button
+ *   2. Gatekeeper → deletes every non-bot message sent directly in any group
+ *      that has the bot, so ALL chat happens inside the Futelo app.
+ *
+ * The bot NO LONGER mirrors or broadcasts messages back into Telegram.
+ * Telegram groups are purely a hub: the bot deletes any message typed there
+ * and redirects members to the app.
  */
 
 require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
 
 const { Bot, InlineKeyboard } = require('grammy');
-const { upsertUser }          = require('../db/database');
+const { upsertUser, upsertRoom } = require('../db/database');
 
-const BOT_TOKEN   = process.env.BOT_TOKEN;
-const GROUP_ID    = process.env.GROUP_CHAT_ID;   // e.g. "-100123456789"
-const APP_URL     = process.env.MINI_APP_URL;    // e.g. "https://futelo.xyz"
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const APP_URL   = process.env.MINI_APP_URL;   // e.g. "https://futelo.xyz"
 
 if (!BOT_TOKEN) throw new Error('BOT_TOKEN missing from .env');
 
 const bot = new Bot(BOT_TOKEN);
 
 // ── /start ─────────────────────────────────────────────────────────────────
+// Works in both private chats (DMs with the bot) and group chats.
+// In a group the command registers the group as a room and shows a button
+// that opens the Mini App (Telegram passes the group context automatically).
 bot.command('start', async (ctx) => {
   const tgUser = ctx.from;
+  const chat   = ctx.chat;
 
-  // Register / update user in SQLite
+  // Register / update the user in SQLite
   upsertUser({
     id:         tgUser.id,
     username:   tgUser.username   || '',
     first_name: tgUser.first_name || '',
-    photo_url:  '',  // populated later via getUserProfilePhotos if needed
+    photo_url:  '',
   });
 
-  const keyboard = new InlineKeyboard().webApp('🎮 Open Futelo', APP_URL);
+  const isGroup = chat && (chat.type === 'group' || chat.type === 'supergroup');
 
-  await ctx.reply(
-    `👋 Welcome to *Futelo*, ${tgUser.first_name || 'player'}!\n\n` +
-    `Chat using your Letter inventory. Earn Coins, avoid spam penalties, ` +
-    `and build your alphabet in the Shop.\n\n` +
-    `Tap the button below to launch the app ⬇️`,
-    { parse_mode: 'Markdown', reply_markup: keyboard }
-  );
+  if (isGroup) {
+    // Register the group as a Futelo room
+    upsertRoom(chat.id, chat.title || '');
+
+    const keyboard = new InlineKeyboard().webApp('🎮 Abrir Futelo', APP_URL);
+
+    await ctx.reply(
+      `👋 ¡Hola, *${tgUser.first_name || 'jugador'}*!\n\n` +
+      `*Futelo* es un juego de chat con inventario de letras.\n` +
+      `Escribe mensajes usando tu teclado de letras, gana Monedas y construye tu abecedario.\n\n` +
+      `⚠️ *Los mensajes aquí serán borrados.* Toda la conversación ocurre dentro de la app.\n\n` +
+      `Pulsa el botón para abrir la app ⬇️`,
+      { parse_mode: 'Markdown', reply_markup: keyboard }
+    );
+  } else {
+    // DM with the bot — tell the user to open from a group
+    await ctx.reply(
+      `👋 ¡Hola, *${tgUser.first_name || 'jugador'}*!\n\n` +
+      `Para jugar a *Futelo* añade el bot a un grupo y escribe */start* allí.\n` +
+      `El bot creará una sala exclusiva para ese grupo y todos sus miembros podrán chatear en la app.`,
+      { parse_mode: 'Markdown' }
+    );
+  }
 });
 
-// ── Gatekeeper: delete non-bot messages in the group ──────────────────────
+// ── Gatekeeper: delete all non-bot messages in any group ──────────────────
+// The app is the only place to chat — messages in the Telegram group itself
+// are deleted immediately to keep the group clean and redirect users to the app.
 bot.on('message', async (ctx) => {
-  const chatId = String(ctx.chat?.id);
-  if (chatId !== String(GROUP_ID)) return;   // only apply to our group
+  const chat = ctx.chat;
+  if (!chat) return;
+  const isGroup = chat.type === 'group' || chat.type === 'supergroup';
+  if (!isGroup) return;
 
   // Let the bot's own messages through
   if (ctx.from?.is_bot) return;
@@ -57,42 +83,9 @@ bot.on('message', async (ctx) => {
   try {
     await ctx.deleteMessage();
   } catch {
-    // Message may already be gone – silently ignore
+    // Message may already be gone or bot lacks permission — silently ignore
   }
 });
 
-// ── Mirror helper (called from Socket.io server) ───────────────────────────
-/**
- * Post a validated Futelo message into the Telegram group as a
- * read-only feed entry.
- *
- * @param {{ username: string, first_name: string, text: string, coinDelta: number, tier: number }} payload
- */
-async function broadcastToGroup(payload) {
-  if (!GROUP_ID) return;
+module.exports = { bot };
 
-  const tierLabel = {
-    1: '✅',
-    2: '⚠️ Spam Warning',
-    3: '🚫 Spam Penalty',
-  }[payload.tier] || '';
-
-  const displayName = payload.username
-    ? `@${payload.username}`
-    : payload.first_name;
-
-  const coinStr =
-    payload.coinDelta > 0 ? `+${payload.coinDelta}` : String(payload.coinDelta);
-
-  const text =
-    `💬 *${displayName}:* ${payload.text}\n` +
-    `${tierLabel}  ${coinStr === '0' ? '' : `${coinStr} coins`}`.trim();
-
-  try {
-    await bot.api.sendMessage(GROUP_ID, text, { parse_mode: 'Markdown' });
-  } catch (err) {
-    console.error('[Bot] broadcastToGroup error:', err.message);
-  }
-}
-
-module.exports = { bot, broadcastToGroup };

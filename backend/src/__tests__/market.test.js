@@ -103,7 +103,7 @@ describe('listLetter', () => {
     expect(stmts.updateInventory.run).toHaveBeenCalledWith(
       JSON.stringify({ a: 1 }), 1
     );
-    expect(stmts.insertMarketListing.run).toHaveBeenCalledWith(1, 'a', 75);
+    expect(stmts.insertMarketListing.run).toHaveBeenCalledWith(1, 'a', 75, 0);
   });
 
   test('removes the letter key from inventory when level drops to 0', () => {
@@ -270,7 +270,7 @@ describe('getUserListings', () => {
     stmts.getUserMarketListings.all.mockReturnValue(rows);
 
     expect(getUserListings(10)).toEqual(rows);
-    expect(stmts.getUserMarketListings.all).toHaveBeenCalledWith(10);
+    expect(stmts.getUserMarketListings.all).toHaveBeenCalledWith(10, 0);
   });
 });
 
@@ -286,7 +286,7 @@ describe('Black market (bmListLetter)', () => {
     const result = bmListLetter(1, 'a', 40);
 
     expect(result.listingId).toBe(99);
-    expect(stmts.insertBmListing.run).toHaveBeenCalledWith(1, 'a', 40);
+    expect(stmts.insertBmListing.run).toHaveBeenCalledWith(1, 'a', 40, 0);
     // Regular stmt must NOT have been called
     expect(stmts.insertMarketListing.run).not.toHaveBeenCalled();
   });
@@ -311,7 +311,7 @@ describe('Black market (getBmOpenListings / getBmUserListings)', () => {
     stmts.getUserBmListings.all.mockReturnValue(rows);
 
     expect(getBmUserListings(77)).toEqual(rows);
-    expect(stmts.getUserBmListings.all).toHaveBeenCalledWith(77);
+    expect(stmts.getUserBmListings.all).toHaveBeenCalledWith(77, 0);
     expect(stmts.getUserMarketListings.all).not.toHaveBeenCalled();
   });
 });

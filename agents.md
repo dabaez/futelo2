@@ -173,22 +173,24 @@ picks up the new values on next page load via `GET /api/config`.
 - WAL mode + `synchronous = NORMAL` — safe and fast on the 1 GB droplet.
 - DB file lives at `../../data/futelo.db` relative to `database.js`
   (i.e. `futelo/data/futelo.db`). The `data/` directory is created on first run.
-- **Current schema version: 7** (migrations v1–v7 applied automatically on startup).
+- **Current schema version: 8** (migrations v1–v8 applied automatically on startup).
 
 #### Tables
 
 | Table | Purpose |
 |---|---|
 | `users` | One row per Telegram user. `inventory_json` is a JSON string `{"a":3,"b":1,...}`. `pickaxe_hits` integer counter (migration v7). Special row: `id=0` (`username='sistema'`) for system messages. |
-| `game_state` | Key/value. Holds `last_sender_id` and BM heat state. |
-| `messages` | Persisted chat log used to hydrate the feed on load. `user_id=0` rows are system messages (pill UI). |
+| `rooms` | One row per Telegram group that has ever started the bot (migration v8). Columns: `id` (Telegram `chat_id`, negative int), `title`, `created_at`. Room 0 is the legacy global placeholder. |
+| `room_member_streaks` | Per-room streak counter (migration v8). Columns: `room_id`, `user_id`, `streak`. Replaces the old single-value `last_sender_id` in `game_state`. |
+| `game_state` | Key/value. Holds BM heat state and per-room last-sender keys (`room:ROOM_ID:last_sender`) and lottery jackpot carry-overs (`room:ROOM_ID:lottery_jackpot`). |
+| `messages` | Persisted chat log used to hydrate the feed on load. Has `room_id` column. `user_id=0` rows are system messages (pill UI). |
 | `letter_locks` | Active Tier-3 penalties per user. `locked_until` is a Unix timestamp. |
-| `prompts` | One row per prompt round. `status`: `active` or `closed`. |
+| `prompts` | One row per prompt round. `status`: `active` or `closed`. Has `room_id` column. |
 | `prompt_replies` | Replies to a prompt. Each row has `user_id`, `text`, `vote_count`. |
 | `prompt_votes` | One vote per `(reply_id, voter_id)` pair — enforces one-vote-per-user. |
-| `market_listings` | One row per P2P listing. `status`: `open` / `sold` / `cancelled`. Columns: `seller_id`, `letter`, `price`, `buyer_id`, `listed_at`, `resolved_at`. |
-| `black_market_listings` | Identical schema to `market_listings` but completely separate table. Used by the secret black market. |
-| `lottery_rounds` | One row per gambling round. `status`: `active` / `closed`. Holds `secret_letter`, `jackpot`, `started_by`, `closes_at`. |
+| `market_listings` | One row per P2P listing. `status`: `open` / `sold` / `cancelled`. Columns: `seller_id`, `letter`, `price`, `buyer_id`, `listed_at`, `resolved_at`, `room_id`. |
+| `black_market_listings` | Identical schema to `market_listings` (incl. `room_id`) but completely separate table. Used by the secret black market. |
+| `lottery_rounds` | One row per gambling round. `status`: `active` / `closed`. Has `room_id` column. Holds `secret_letter`, `jackpot`, `started_by`, `closes_at`. |
 | `lottery_bets` | Multiple bets per user per round (no uniqueness constraint). Columns: `round_id`, `user_id`, `letter`. |
 | `notifications` | Persistent per-user toast queue. `delivered=0` until the user connects and drains them. Pruned 7 days after delivery. |
 
@@ -199,19 +201,29 @@ All queries are **pre-compiled** on startup in the `stmts` object exported from
 keeps query compilation cost to zero per request and avoids re-parsing.
 
 ```js
-const { db, stmts, upsertUser, requireUser } = require('../db/database');
+const { db, stmts, upsertUser, requireUser, upsertRoom, requireRoom } = require('../db/database');
 ```
+
+New room/streak prepared statements:
+
+| Statement | What it does |
+|---|---|
+| `upsertRoom` (function) | `INSERT OR IGNORE` into `rooms`; exported as a helper, not a stmt. |
+| `getRoomById` | Fetches one room by `id`. |
+| `getAllRooms` | Returns all rows from `rooms` — used by the per-room scheduler. |
+| `getRoomStreak` | `SELECT streak FROM room_member_streaks WHERE room_id=? AND user_id=?` |
+| `upsertRoomStreak` | Inserts or updates a `room_member_streaks` row. |
 
 P2P market prepared statements (also in `stmts`):
 
 | Statement | What it does |
 |---|---|
-| `insertMarketListing` | Inserts a new `open` listing, returns `lastInsertRowid`. |
+| `insertMarketListing` | Inserts a new `open` listing (incl. `room_id`), returns `lastInsertRowid`. |
 | `getMarketListing` | Fetches one listing by `id`. |
-| `getOpenMarketListings` | Returns all `open` listings joined with seller username/first_name. |
-| `getActiveSellerListing` | Finds an open listing for a `(sellerId, letter)` pair — used to detect duplicates. |
+| `getOpenMarketListings` | Returns all `open` listings for a given `room_id`, joined with seller username/first_name. |
+| `getActiveSellerListing` | Finds an open listing for a `(sellerId, letter, roomId)` triple — used to detect duplicates. |
 | `resolveMarketListing` | Updates `status`, `buyer_id`, and `resolved_at` by `id`. |
-| `getUserMarketListings` | Returns a user's 20 most recent listings (any status). |
+| `getUserMarketListings` | Returns a user's 20 most recent listings for a given `room_id` (any status). |
 
 Black market prepared statements (mirror set, separate table):
 
@@ -219,9 +231,10 @@ Black market prepared statements (mirror set, separate table):
 |---|---|
 | `insertBmListing` | Same as `insertMarketListing` but writes to `black_market_listings`. |
 | `getBmListing` | Fetches one BM listing by `id`. |
-| `getOpenBmListings` | Returns all open BM listings with seller names. |
+| `getOpenBmListings` | Returns open BM listings for a given `room_id` with seller names. |
+| `getAllOpenBmListingsGlobal` | Returns **all** open BM listings regardless of room — used by the global catch check. |
 | `resolveBmListing` | Resolves a BM listing (sold / cancelled). |
-| `getUserBmListings` | Returns a user's 20 most recent BM listings. |
+| `getUserBmListings` | Returns a user's 20 most recent BM listings for a given `room_id`. |
 
 Mining prepared statements (in `stmts`):
 
@@ -261,12 +274,10 @@ Letters are NEVER consumed — they are unlock levels.
 1. **First-message bonus** — on a user's very first message (message count = 0 before insert), `FIRST_MESSAGE_LETTERS` (26) random letters are added to their inventory. One-time per user.
 2. **Shop roll** — spending coins via `shopRoll()`.
 
-**Critical invariant**: every call to `processMessage` wraps **all** DB writes
-in a single `db.transaction()`. Do not split the writes — partial state is a
-game-breaking bug.
+**The critical invariant** for `processMessage`: streak is now tracked per-room via the `room_member_streaks` table (not a global `last_sender_id`). The last-sender game_state key is `room:${roomId}:last_sender`.
 
 Exported:
-- `processMessage(userId, text)` — throws a user-facing `Error` on validation
+- `processMessage(userId, text, roomId = 0)` — throws a user-facing `Error` on validation
   failure; returns a rich result object on success.
 - `shopRoll(userId)` — weighted-random lootbox roll. Costs `ROLL_COST` coins (scaled
   by total inventory levels). Picks a tier from `LOOTBOX_TIERS` using `rollRarity()`.
@@ -303,16 +314,16 @@ Exported functions:
 
 | Function | Market | Description |
 |---|---|---|
-| `listLetter(sellerId, letter, price)` | regular | Escrows one letter level, creates an `open` listing. |
+| `listLetter(sellerId, letter, price, roomId = 0)` | regular | Escrows one letter level, creates an `open` listing for the given room. |
 | `buyListing(buyerId, listingId)` | regular | Deducts price from buyer; credits `floor(price*(1−commission))` to seller; grants letter. |
 | `cancelListing(sellerId, listingId)` | regular | Returns escrowed letter, cancels listing. |
-| `getOpenListings()` | regular | All open listings with seller names. |
-| `getUserListings(userId)` | regular | User's 20 most recent listings (any status). |
-| `bmListLetter(sellerId, letter, price)` | black | Same as `listLetter` on the BM table. |
+| `getOpenListings(roomId = 0)` | regular | Open listings for the room with seller names. |
+| `getUserListings(userId, roomId = 0)` | regular | User's 20 most recent listings in the room (any status). |
+| `bmListLetter(sellerId, letter, price, roomId = 0)` | black | Same as `listLetter` on the BM table. |
 | `bmBuyListing(buyerId, listingId)` | black | Same as `buyListing` on the BM table. |
 | `bmCancelListing(sellerId, listingId)` | black | Same as `cancelListing` on the BM table. |
-| `getBmOpenListings()` | black | Open BM listings with seller names. |
-| `getBmUserListings(userId)` | black | User's 20 most recent BM listings. |
+| `getBmOpenListings(roomId = 0)` | black | Open BM listings for the room with seller names. |
+| `getBmUserListings(userId, roomId = 0)` | black | User's 20 most recent BM listings in the room. |
 
 All buy/list/cancel functions throw a user-facing `Error` on validation failure.
 All write operations are wrapped in `db.transaction()` for atomicity.
@@ -335,21 +346,17 @@ Heat sources: catch events (`+BM_HEAT_CATCH_INCREMENT`), chat mention of
 
 Manages the letter-gambling mini-game rounds.
 
-- `startLottery(userId)` — deducts `LOTTERY_START_COST` coins, picks a secret letter,
-  creates a `lottery_rounds` row with `closes_at = now + LOTTERY_DURATION_SEC`, returns the round.
+- `startLottery(userId, roomId)` — deducts `LOTTERY_START_COST` coins, picks a secret letter,
+  creates a `lottery_rounds` row (`room_id = roomId`) with `closes_at = now + LOTTERY_DURATION_SEC`, returns the round.
 - `placeBet(userId, roundId, letter)`:
   - Validates round is active and user has `inventory[letter] >= 1`.
   - Counts existing bets `k` from this user in this round.
   - For k > 0: error probability `1 − 0.5^k` — random message from `GAMBLING_ERRORS`
     (bet is still placed).
   - Deducts 1 level from inventory, inserts to `lottery_bets`.
-- `closeLottery(roundId)`:
-  - Finds winning bets (letter matches secret).
-  - Each winner gets: `inventory[secretLetter] += GAMBLING_WIN_LETTERS` (capped at `MAX_LETTER_LEVEL`)
-    + `coinsEarned = jackpot + otherBetCount × GAMBLING_COINS_PER_LETTER`.
-  - No winners: bet letters convert to coins → carry-over `jackpot`.
-  - Returns `{ roundId, secretLetter, jackpot, winners, carryOver }`.
-- `getActiveLotteryRound()` — returns current active round or `null`.
+- `closeLottery(roundId)` — reads `room_id` from the round row; distributes winnings; returns `{ roundId, secretLetter, jackpot, winners, carryOver }`.
+  Carry-over jackpot is stored in game_state key `room:${roomId}:lottery_jackpot`.
+- `getActiveLotteryRound(roomId)` — returns current active round for the room or `null`.
 
 ### Prompt Engine (`backend/src/engine/promptEngine.js`)
 
@@ -357,15 +364,15 @@ Manages the community prompt lifecycle. All durations and coin rewards come
 from `config.js`.
 
 Exported:
-- `startPrompt(text)` — opens a new prompt (throws if one is already active).
-- `getActivePrompt()` — returns the current active prompt row or `null`.
+- `startPrompt(roomId, text)` — opens a new prompt for the room (throws if one is already active).
+- `getActivePrompt(roomId)` — returns the current active prompt row for the room or `null`.
 - `getPromptWithReplies(promptId)` — returns prompt + all replies with vote counts.
 - `submitReply(promptId, userId, text)` — adds a reply row, grants `PROMPT_REPLY_BONUS` coins to author.
 - `castVote(replyId, voterId)` — records a vote (one per user per prompt).
 - `closePrompt(promptId)` — marks prompt closed, distributes coin rewards
   (`PROMPT_WINNER_BONUS`, `PROMPT_RUNNER_UP_BONUS`), returns winner info.
-- `buyPrompt(userId, text)` — deducts `PROMPT_BUY_COST` from user's coins,
-  then calls `startPrompt`.
+- `buyPrompt(userId, roomId)` — deducts `PROMPT_BUY_COST` from user's coins,
+  then picks a random prompt from `PROMPT_POOL` and calls `startPrompt(roomId, text)`.
 - `PROMPT_DURATION_SEC`, `WINNER_BONUS`, `RUNNER_UP_BONUS`, `PROMPT_BUY_COST`
   re-exported for use in `server.js`.
 
@@ -373,17 +380,19 @@ Exported:
 
 - Imported lazily in `server.js`; skipped entirely when `DEV_MODE=true` and
   no `BOT_TOKEN` is set.
-- `/start` command: upserts the user, replies with Mini App button.
-- `on('message')` in the group: deletes every message from non-bot users.
-- `broadcastToGroup(payload)` — called by `server.js` after every validated
-  message to mirror the chat as a read-only feed in Telegram. Fire-and-forget.
+- `/start` in a **group**: calls `upsertRoom(chat.id, chat.title)` then replies with Mini App button. Each group that uses `/start` automatically gets its own room.
+- `/start` in a **DM**: replies asking the user to add the bot to a group instead.
+- `on('message')` in any group: deletes every message from non-bot users (gatekeeper for all groups the bot is a member of).
+- No `broadcastToGroup` / Telegram mirroring. The bot only deletes messages; the chat lives entirely in the Mini App.
+- Exports: `{ bot }` only.
 
 ### Authentication (`backend/src/bot/auth.js`)
 
-- `validateInitData(initDataRaw, botToken)` — full HMAC-SHA256 check per
-  Telegram spec.
+- `validateInitData(initDataRaw, botToken)` — returns `{ user, chatId, chatTitle }` after full HMAC-SHA256 check per Telegram spec. `chatId` is parsed from the `chat` field in initData.
 - When `DEV_MODE=true`, also accepts tokens of the form
-  `dev:USER_ID:username:First Name` and skips the HMAC.
+  `dev:USER_ID:username:First Name[:CHAT_ID[:Chat Title]]` and skips the HMAC.
+  `CHAT_ID` is detected by integer parsing; if absent, defaults to `-1001` / `'Dev Room'`.
+- `validateInitDataDev(token)` — parses dev tokens directly, same return shape.
 - Used in **both** the HTTP auth middleware and the Socket.io middleware.
 
 ### HTTP API
@@ -393,26 +402,26 @@ All endpoints are defined in `server.js`.
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/api/config` | none | Public game constants + live BM heat/catchProb |
-| POST | `/api/auth` | initData header | Upsert user, return profile |
+| POST | `/api/auth` | initData header | Upsert user + room, return `{ user, chatId }` |
 | GET | `/api/me` | initData header | Current user profile + locks |
-| GET | `/api/messages?limit=N` | none | Last N messages (default 50, max 200) |
-| POST | `/api/message` | initData header | Send a message via the engine |
+| GET | `/api/messages?limit=N&roomId=R` | none | Last N messages in room R (default 50, max 200) |
+| POST | `/api/message` | initData header | Send a message via the engine (roomId from auth token) |
 | POST | `/api/shop/roll` | initData header | Open a lootbox — returns `{ newLetters, rarity, newCoins, newInventory, rollCost }` |
-| POST | `/api/shop/prompt` | initData header | Buy and fire a community prompt |
-| GET | `/api/prompt/active` | none | Active prompt + replies (or `{ prompt: null }`) |
-| GET | `/api/market/listings` | none | All open P2P listings (with seller names) |
-| GET | `/api/market/my-listings` | initData header | Caller's 20 most recent listings (any status) |
-| POST | `/api/market/list` | initData header | Create a listing (body: `{ letter, price }`) |
+| POST | `/api/shop/prompt` | initData header | Buy and fire a community prompt (roomId from auth token) |
+| GET | `/api/prompt/active?roomId=R` | none | Active prompt + replies for room R (or `{ prompt: null }`) |
+| GET | `/api/market/listings?roomId=R` | none | Open P2P listings for room R (with seller names) |
+| GET | `/api/market/my-listings?roomId=R` | initData header | Caller's 20 most recent listings in room R (any status) |
+| POST | `/api/market/list` | initData header | Create a listing (body: `{ letter, price }`; roomId from auth token) |
 | POST | `/api/market/buy/:id` | initData header | Buy a listing — buyer pays full price, seller receives 80% |
 | POST | `/api/market/cancel/:id` | initData header | Cancel own open listing, recover escrowed letter |
-| GET | `/api/bm/listings` | none | Open **black market** listings (with seller names) |
-| GET | `/api/bm/my-listings` | initData header | Caller's 20 most recent BM listings |
-| POST | `/api/bm/list` | initData header | Create a BM listing (body: `{ letter, price }`) |
+| GET | `/api/bm/listings?roomId=R` | none | Open **black market** listings for room R (with seller names) |
+| GET | `/api/bm/my-listings?roomId=R` | initData header | Caller's 20 most recent BM listings in room R |
+| POST | `/api/bm/list` | initData header | Create a BM listing (body: `{ letter, price }`; roomId from auth token) |
 | POST | `/api/bm/buy/:id` | initData header | Buy a BM listing — no commission |
 | POST | `/api/bm/cancel/:id` | initData header | Cancel own open BM listing, recover letter |
-| POST | `/api/lottery/start` | initData header | Start a lottery round (costs `LOTTERY_START_COST` coins) |
+| POST | `/api/lottery/start` | initData header | Start a lottery round (costs `LOTTERY_START_COST` coins; roomId from auth token) |
 | POST | `/api/lottery/bet` | initData header | Place a bet `{ roundId, letter }` |
-| GET | `/api/lottery/active` | none | Active round + bets (or `{ round: null }`) |
+| GET | `/api/lottery/active?roomId=R` | none | Active round + bets for room R (or `{ round: null }`) |
 | POST | `/api/mine/buy` | initData header | Buy a pickaxe — deduct `PICKAXE_COST`, add `PICKAXE_HITS` swings |
 | POST | `/api/mine/swing` | initData header | Swing once — 40% chance to find a random letter |
 
@@ -421,19 +430,19 @@ Auth is sent as the `x-init-data` HTTP header **or** `body.initData`.
 ### Socket.io
 
 - Clients authenticate on `connect` via `socket.handshake.auth.initData`.
-- Each user joins a personal room `user:USER_ID` for targeted events.
+- On connect each user joins two rooms: `user:USER_ID` (personal events) and `room:CHAT_ID` (group broadcast). `CHAT_ID` comes from the auth token.
 - On connect: pending notifications are drained and emitted immediately.
 
 **Client → Server:**
 
 | Event | Payload | Effect |
 |---|---|---|
-| `send_message` | `{ text }` | Engine validates → `new_message` broadcast |
-| `submit_prompt_reply` | `{ promptId, text }` | Adds a reply → `new_prompt_reply` broadcast |
-| `vote_reply` | `{ replyId }` | Records vote → `vote_update` broadcast |
-| `beg` | — | Broadcasts `new_beg` to all if user is broke |
+| `send_message` | `{ text }` | Engine validates → `new_message` broadcast to `room:CHAT_ID` |
+| `submit_prompt_reply` | `{ promptId, text }` | Adds a reply → `new_prompt_reply` broadcast to `room:CHAT_ID` |
+| `vote_reply` | `{ replyId }` | Records vote → `vote_update` broadcast to `room:CHAT_ID` |
+| `beg` | — | Broadcasts `new_beg` to `room:CHAT_ID` if user is broke |
 
-**Server → Client (broadcast to all):**
+**Server → Client (broadcast to `room:CHAT_ID`):**
 
 | Event | Payload |
 |---|---|
@@ -492,14 +501,14 @@ window.Telegram.WebApp.disableVerticalSwipes?.();
 ```
 App.jsx
  ├── initData (useState)          ← null → DevUserPicker; set → chat
- ├── useAuth(initData)            ← user profile, coins, inventory, locks, pickaxeHits
+ ├── useAuth(initData)            ← user profile, coins, inventory, locks, pickaxeHits, chatId
  ├── useSocket(initData)          ← socket, connected, sendMessage()
- ├── ChatFeed                     ← reads socket for new_message events
+ ├── ChatFeed                     ← chatId prop; reads socket for new_message events
  ├── PromptBanner                 ← prompt, promptReplies, replyMode, handleVote
  ├── RestrictedKeyboard           ← reads inventory + lockedLetters from user
- ├── ShopModal                    ← lootbox roll + P2P market + prompt + mines
- ├── BlackMarketModal             ← secret P2P market (triple-tap)
- └── LotteryModal                 ← gambling round (auto-opens on new_lottery)
+ ├── ShopModal                    ← chatId prop; lootbox roll + P2P market + prompt + mines
+ ├── BlackMarketModal             ← chatId prop; secret P2P market (triple-tap)
+ └── LotteryModal                 ← chatId prop; gambling round (auto-opens on new_lottery)
 ```
 
 **Triple-tap secret (black market):** `handleShopClick` in `App.jsx` uses
@@ -522,6 +531,10 @@ Socket events App.jsx handles:
 server-pushed state changes. Call it whenever a socket `user_update` event
 or a shop/mine AJAX response arrives. Handles: `newCoins`, `newInventory`,
 `lockedLetter`, `pickaxeHits`.
+
+`useAuth(initData)` now also returns `chatId` (Telegram `chat_id` from the auth
+response). `App.jsx` passes `chatId` as a prop to `ChatFeed`, `ShopModal`,
+`BlackMarketModal`, and `LotteryModal` so each component queries the correct room.
 
 ### System Messages in ChatFeed
 
@@ -608,9 +621,14 @@ Do not hardcode colour hex values. Use `tg-*` classes so dark-mode works.
 ### Dev Mode (Frontend)
 
 When `window.Telegram?.WebApp?.initData` is falsy (plain browser), `App.jsx`
-renders `<DevUserPicker>` instead of the chat UI. The picker generates
-`dev:USER_ID:username:First Name` tokens. Once picked, `initData` is set in
-`useState` and the normal auth + socket flow starts.
+renders `<DevUserPicker>` instead of the chat UI. The picker generates tokens in
+the format `dev:USER_ID:username:First Name:CHAT_ID:Chat Title`.
+Preset users (Alice, Bob, Carol, Dave, Eve) all share **Dev Room** (`-1001001`,
+"Dev Room"). Once picked, `initData` is set in `useState` and the normal auth +
+socket flow starts.
+
+The custom user form includes **Chat ID** and **Chat Title** fields, allowing
+developers to simulate multiple rooms by entering different chat IDs.
 
 An amber banner is shown at the top of the chat while in dev mode with a
 "**cambiar**" link that resets `initData` to `null`.
@@ -630,9 +648,12 @@ SERVER_PORT=3001
 mode. The bot is simply not started.
 
 To simulate two players:
-1. Open `http://localhost:5173` → pick **Alice**.
-2. Open a second tab/incognito → pick **Bob**.
-3. Both use the same SQLite DB and Socket.io room.
+1. Open `http://localhost:5173` → pick **Alice** (Dev Room, `chatId = -1001001`).
+2. Open a second tab/incognito → pick **Bob** (same Dev Room).
+3. Both use the same SQLite DB and Socket.io room `room:-1001001`.
+
+To simulate **multiple rooms**, use the custom user form and enter different
+Chat IDs for different tabs.
 
 ---
 
@@ -693,8 +714,8 @@ To simulate two players:
   per-user data, `io.emit` for broadcast.
 - **Per-user alert (online or offline)?** Use `notifyUser(userId, text, type)` — never emit
   directly without persisting to `notifications`. Offline users will miss un-persisted events.
-- **System chat message?** Use `broadcastSystemMessage(text)` — persists to DB as `userId=0`
-  and emits to all active clients. Becomes visible to late joiners on feed hydration.
+- **System chat message?** Use `broadcastSystemMessage(text, roomId)` — persists to DB as `userId=0`
+  and emits to all active clients in `room:${roomId}`. Becomes visible to late joiners on feed hydration.
 - **New UI state?** Thread it through `App.jsx` → `useAuth`'s `updateUser()`.
   Do not create separate fetch calls inside child components that could
   race with socket events.
@@ -708,22 +729,23 @@ To simulate two players:
 
 - Config: `backend/jest.config.js` (`testEnvironment: 'node'`, `maxWorkers: 1`)
 - Run: `cd backend && npm test`
-- **118 tests across 5 suites** (all passing)
+- **150 tests across 6 suites** (all passing)
 
 | File | Tests | What it covers |
 |---|---|---|
-| `src/__tests__/auth.test.js` | 12 | `validateInitData` HMAC, `validateInitDataDev` dev tokens |
-| `src/__tests__/engine.test.js` | 29 | `letterRequirements` (incl. `_numbers`/`_symbols`), all 3 tiers, coin floor, letter level cap, `shopRoll` (lootbox rarity), ñ support, transaction shape |
+| `src/__tests__/auth.test.js` | 18 | `validateInitData` HMAC, `validateInitDataDev` dev tokens, chatId return values |
+| `src/__tests__/engine.test.js` | 30 | `letterRequirements` (incl. `_numbers`/`_symbols`), all 3 tiers, coin floor, letter level cap, `shopRoll` (lootbox rarity), ñ support, transaction shape |
 | `src/__tests__/market.test.js` | 23 | `listLetter`, `buyListing`, `cancelListing`, `getOpenListings`, `getUserListings`, coin/letter cap invariants; BM factory isolation (`bmListLetter`, `bmCancelListing`, `getBmOpenListings`, `getBmUserListings`) |
-| `src/__tests__/blackMarket.test.js` | 17 | Heat decay, `addHeat`, `catchProbability`, `runCatchCheck`, listing expiry |
-| `src/__tests__/api.test.js` | 37 | All REST endpoints incl. P2P market + full BM endpoint flow, end-to-end with temp SQLite DB |
+| `src/__tests__/blackMarket.test.js` | 16 | Heat decay, `addHeat`, `catchProbability`, `runCatchCheck`, listing expiry |
+| `src/__tests__/mining.test.js` | 18 | `buyPickaxe`, `swing`, hit/miss probability, coin deduction, inventory cap |
+| `src/__tests__/api.test.js` | 45 | All REST endpoints incl. P2P market + full BM endpoint flow + mining, end-to-end with temp SQLite DB |
 
 **Key patterns:**
 - `FUTELO_DATA_DIR` env override points the DB to a temp directory per test run.
 - `server.js` is guarded with `require.main === module` so supertest can import it without binding a port.
 - `jest.resetAllMocks()` in `beforeEach` (not `clearAllMocks`) to wipe `mockReturnValueOnce` queues. Also re-set `db.transaction.mockImplementation(fn => () => fn())` at the top of each `beforeEach` in `market.test.js`.
 - API tests set `process.env.BOT_TOKEN = ''` before `jest.resetModules()` to prevent grammY from starting.
-- User token constants: `ALICE='dev:1001:…'`, `BOB='dev:1002:…'`, `DAVE='dev:1004:…'` (market buyer), `EVE='dev:1005:…'` (market seller), `FRANK='dev:1006:…'` (BM tests only). Use fresh users for new suites to avoid state conflicts with earlier tests.
+- User token constants: `ALICE='dev:1001:…'`, `BOB='dev:1002:…'`, `DAVE='dev:1004:…'` (market buyer), `EVE='dev:1005:…'` (market seller), `FRANK='dev:1006:…'` (BM tests only), `GINA='dev:1007:…'` / `HANK='dev:1008:…'` (mining tests, defined inline). Use fresh users for new suites to avoid state conflicts with earlier tests.
 
 ### Frontend — Vitest + Testing Library
 
@@ -754,11 +776,13 @@ To simulate two players:
 | Tailwind classes not showing | Purge is based on `content: ['./src/**/*.{js,jsx}']` in `tailwind.config.js`. Dynamically constructed class strings (string interpolation) won't be detected — use full class names. |
 | Keyboard row layout | Space and Enter live on **row 3** (their own row). Do not move them onto the letter rows. The `ROWS` constant in `RestrictedKeyboard.jsx` is the single source of truth. |
 | `ShopModal` shows wrong prices | It fetches `/api/config` on mount. If the fetch fails it falls back to the hardcoded defaults in `useState`. Always restart the backend after editing `config.js`. |
-| Prompt won't start | Only one prompt can be active at a time. Call `getActivePrompt()` first; if it returns non-null, the previous round must close before a new one starts. |
-| Lottery won't start | Only one round can be active at a time. Same pattern — check `getActiveLotteryRound()` first. |
+| Prompt won't start | Only one prompt can be active at a time per room. Call `getActivePrompt(roomId)` first; if it returns non-null, the previous round must close before a new one starts. |
+| Lottery won't start | Only one round can be active at a time per room. Same pattern — check `getActiveLotteryRound(roomId)` first. |
 | Engine error strings changed | Test regexes in `engine.test.js` and `api.test.js` must match the Spanish wording — e.g. `/vac/i` for empty, `/insuficiente/i` for not-enough, `/bloqueada/i` for locked. |
 | Seller misses sale toast when offline | Use `notifyUser()` — not a direct socket emit — so the notification persists until delivered. |
 | System messages missing from feed | Requires `id=0` user row (migration v5). Restart the server to re-run migrations on a fresh DB. |
 | `rollResult` shape changed | `rollResult` in `ShopModal` is `{ letters: string[], rarity: string }` — not a bare `string[]`. Access letters via `rollResult.letters`. |
 | `pickaxeHits` not updating after mine | `ShopModal` maintains its own `hitsLeft` state synced from `initialPickaxeHits` prop via `useEffect`. The prop flows: server response → `onPurchase` → `updateUser` → `App.jsx` state → `pickaxeHits` prop → `ShopModal`. |
 | BM list fires "Compraste" toast | The buy toast in `handleBmPurchase` checks `result.newCoins !== undefined` — list responses omit `newCoins` so no toast fires. Do not add `newCoins` to the list response. |
+| Game state bleeds between groups | Every query that reads/writes game state (prompts, market, lottery, messages, streaks) must pass the correct `roomId`. Room 0 is the legacy global placeholder — do not use it in new code. |
+| BM heat is per-room | It is **not** per-room — BM heat is global. `getAllOpenBmListingsGlobal` scans all rooms. This is intentional. |

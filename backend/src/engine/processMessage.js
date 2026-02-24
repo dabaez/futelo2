@@ -118,6 +118,7 @@ function pickLockTarget(inventory) {
  *
  * @param {number} userId  – Telegram user ID
  * @param {string} text    – Raw message text
+ * @param {number} roomId  – Room (Telegram group) ID
  * @returns {{
  *   success: true,
  *   messageId: number,
@@ -131,7 +132,7 @@ function pickLockTarget(inventory) {
  * }}
  * @throws {Error} with a user-facing message on validation failure
  */
-function processMessage(userId, text) {
+function processMessage(userId, text, roomId = 0) {
   if (!text || text.trim().length === 0) {
     throw new Error('El mensaje no puede estar vacío.');
   }
@@ -168,8 +169,13 @@ function processMessage(userId, text) {
   }
 
   // ── Step 5: Streak / tier calculation ────────────────────────────────────
-  const lastSenderRow = stmts.getState.get('last_sender_id');
-  const lastSenderId = lastSenderRow ? Number(lastSenderRow.value) : null;
+  const lastSenderKey = `room:${roomId}:last_sender`;
+  const lastSenderRow = stmts.getState.get(lastSenderKey);
+  const lastSenderId  = lastSenderRow ? Number(lastSenderRow.value) : null;
+
+  // Per-room streak (falls back to 0 if this user hasn't messaged in this room)
+  const roomStreakRow = stmts.getRoomStreak.get(roomId, userId);
+  const currentStreak = roomStreakRow ? roomStreakRow.streak : 0;
 
   let tier, coinDelta, newLetters, lockedLetter, newStreak;
 
@@ -181,7 +187,7 @@ function processMessage(userId, text) {
     lockedLetter = null;
     newStreak   = 1;
   } else {
-    newStreak = user.streak_count + 1;
+    newStreak = currentStreak + 1;
 
     if (newStreak === 2) {
       // ── Tier 2 – first self-reply ──────────────────────────────────────
@@ -221,10 +227,10 @@ function processMessage(userId, text) {
       updatedInventory[letter] = Math.min((updatedInventory[letter] || 0) + 1, MAX_LETTER_LEVEL);
     }
 
-    // Persist user state
+    // Persist user state (coins + inventory; streak written per-room below)
     stmts.updateUser.run({
       coinDelta,
-      streak:    newStreak,
+      streak:    newStreak,  // kept for backward-compat with any direct users.streak_count reads
       inventory: JSON.stringify(updatedInventory),
       userId,
     });
@@ -234,14 +240,16 @@ function processMessage(userId, text) {
       stmts.upsertLock.run(userId, lockedLetter, nowSec + LOCK_DURATION_SEC);
     }
 
-    // Advance global last-sender
-    stmts.setState.run('last_sender_id', String(userId));
+    // Advance per-room last-sender and streak
+    stmts.setState.run(`room:${roomId}:last_sender`, String(userId));
+    stmts.upsertRoomStreak.run(roomId, userId, newStreak);
 
-    // Persist message
+    // Persist message with room_id
     const { lastInsertRowid } = stmts.insertMessage.run({
       userId,
       text,
       coinDelta,
+      roomId,
     });
 
     // Opportunistic cleanup of expired locks (non-blocking side-effect)

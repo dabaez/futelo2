@@ -9,6 +9,7 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
  * @param {string|null} initData
  * @returns {{
  *   user: object|null,
+ *   chatId: number,
  *   loading: boolean,
  *   error: string|null,
  *   updateUser: (patch: object) => void,
@@ -16,6 +17,7 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
  */
 export function useAuth(initData) {
   const [user,    setUser]    = useState(null);
+  const [chatId,  setChatId]  = useState(0);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
 
@@ -40,6 +42,7 @@ export function useAuth(initData) {
           ...data.user,
           pickaxeHits: data.user.pickaxe_hits ?? 0,
         });
+        setChatId(data.chatId ?? 0);
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
@@ -61,5 +64,5 @@ export function useAuth(initData) {
     });
   }, []);
 
-  return { user, loading, error, updateUser };
+  return { user, chatId, loading, error, updateUser };
 }
