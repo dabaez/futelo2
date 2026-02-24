@@ -18,8 +18,9 @@ require('dotenv').config({ path: require('path').join(__dirname, '../../.env') }
 const { Bot, InlineKeyboard } = require('grammy');
 const { upsertUser, upsertRoom, stmts, setRoomGatekeeper } = require('../db/database');
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const APP_URL   = process.env.MINI_APP_URL;   // e.g. "https://futelo.xyz"
+const BOT_TOKEN          = process.env.BOT_TOKEN;
+const APP_URL            = process.env.MINI_APP_URL;         // fallback plain URL
+const DIRECT_LINK        = process.env.MINI_APP_DIRECT_LINK; // t.me/botname/appname
 
 if (!BOT_TOKEN) throw new Error('BOT_TOKEN missing from .env');
 
@@ -71,9 +72,15 @@ bot.command('start', async (ctx) => {
     // Register the group as a Futelo room
     upsertRoom(chat.id, chat.title || '');
 
-    // webApp button type is rejected in group chats — use a URL button instead.
-    // URL buttons work everywhere and still open the Mini App in Telegram.
-    const keyboard = new InlineKeyboard().url('🎮 Abrir Futelo', APP_URL);
+    // Build the button URL.
+    // If MINI_APP_DIRECT_LINK (t.me/botname/appname) is configured, append
+    // ?startapp=chatId so the Mini App receives the room ID as start_param
+    // and initData is fully populated by the WebApp SDK.
+    // Without it we fall back to a plain URL (no initData — dev/fallback only).
+    const buttonUrl = DIRECT_LINK
+      ? `${DIRECT_LINK}?startapp=${chat.id}`
+      : APP_URL;
+    const keyboard = new InlineKeyboard().url('🎮 Abrir Futelo', buttonUrl);
 
     // Check gatekeeper permission and build an optional note line
     let gatekeeperNote = '';

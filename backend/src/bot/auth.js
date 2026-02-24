@@ -113,7 +113,7 @@ function validateInitData(initDataRaw, botToken) {
 
   const user = JSON.parse(userJson);
 
-  // Extract chat context (present when opened inside a group)
+  // Extract chat context (present when opened inside a group via web_app button)
   let chatId    = 0;
   let chatTitle = '';
   const chatJson = params.get('chat');
@@ -123,6 +123,16 @@ function validateInitData(initDataRaw, botToken) {
       chatId    = chat.id ?? 0;
       chatTitle = chat.title ?? '';
     } catch { /* ignore malformed chat JSON */ }
+  }
+
+  // Fallback: when opened via t.me direct link with ?startapp=CHATID,
+  // the 'chat' field is absent but start_param carries the chat ID.
+  if (!chatId) {
+    const startParam = params.get('start_param');
+    if (startParam) {
+      const n = parseInt(startParam, 10);
+      if (!isNaN(n) && n !== 0) chatId = n;
+    }
   }
 
   return { user, chatId, chatTitle };
