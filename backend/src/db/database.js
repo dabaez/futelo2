@@ -98,7 +98,7 @@ db.exec(`
 // Migrations never need to be run manually — they apply automatically on startup.
 //
 // IMPORTANT: never edit a past migration. Always append a new one.
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 const migrations = [
   // ── v1: P2P letter market ─────────────────────────────────────────────────
@@ -267,6 +267,11 @@ const migrations = [
       CREATE INDEX IF NOT EXISTS idx_ml_room         ON market_listings(room_id, status);
       CREATE INDEX IF NOT EXISTS idx_bml_room        ON black_market_listings(room_id, status);
     `);
+  },
+
+  // v9 – per-room gatekeeper flag
+  () => {
+    db.exec(`ALTER TABLE rooms ADD COLUMN gatekeeper INTEGER NOT NULL DEFAULT 0`);
   },
 ];
 
@@ -457,8 +462,9 @@ const stmts = {
     INSERT INTO rooms (id, title) VALUES (?, ?)
     ON CONFLICT(id) DO UPDATE SET title = excluded.title
   `),
-  getRoomById: db.prepare('SELECT * FROM rooms WHERE id = ?'),
-  getAllRooms: db.prepare('SELECT id, title FROM rooms WHERE id != 0 ORDER BY created_at ASC'),
+  getRoomById:        db.prepare('SELECT * FROM rooms WHERE id = ?'),
+  getAllRooms:        db.prepare('SELECT id, title FROM rooms WHERE id != 0 ORDER BY created_at ASC'),
+  setRoomGatekeeper: db.prepare('UPDATE rooms SET gatekeeper = ? WHERE id = ?'),
 
   // ── Per-room streak tracking ───────────────────────────────────────────────
   getRoomStreak: db.prepare(
@@ -506,4 +512,13 @@ function requireRoom(roomId) {
   return room;
 }
 
-module.exports = { db, stmts, upsertUser, requireUser, upsertRoom, requireRoom };
+/**
+ * Enable or disable the gatekeeper (message deletion) for a room.
+ * @param {number} id      Telegram chat_id
+ * @param {boolean} enabled
+ */
+function setRoomGatekeeper(id, enabled) {
+  stmts.setRoomGatekeeper.run(enabled ? 1 : 0, id);
+}
+
+module.exports = { db, stmts, upsertUser, requireUser, upsertRoom, requireRoom, setRoomGatekeeper };
