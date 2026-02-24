@@ -71,7 +71,9 @@ bot.command('start', async (ctx) => {
     // Register the group as a Futelo room
     upsertRoom(chat.id, chat.title || '');
 
-    const keyboard = new InlineKeyboard().webApp('🎮 Abrir Futelo', APP_URL);
+    // webApp button type is rejected in group chats — use a URL button instead.
+    // URL buttons work everywhere and still open the Mini App in Telegram.
+    const keyboard = new InlineKeyboard().url('🎮 Abrir Futelo', APP_URL);
 
     // Check gatekeeper permission and build an optional note line
     let gatekeeperNote = '';
