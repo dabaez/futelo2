@@ -42,7 +42,7 @@ futelo/
 │   │   │   ├── blackMarket.js     Black market heat / catch mechanic
 │   │   │   └── mining.js          Pickaxe / letter-mine engine
 │   │   └── bot/
-│   │       ├── bot.js             grammY bot (gatekeeper + mirror)
+│   │       ├── bot.js             grammY bot (/start registration + per-room /gatekeeper toggle)
 │   │       └── auth.js            Telegram initData HMAC validator
 │   ├── .env.example
 │   └── package.json
@@ -180,7 +180,7 @@ picks up the new values on next page load via `GET /api/config`.
 | Table | Purpose |
 |---|---|
 | `users` | One row per Telegram user. `inventory_json` is a JSON string `{"a":3,"b":1,...}`. `pickaxe_hits` integer counter (migration v7). Special row: `id=0` (`username='sistema'`) for system messages. |
-| `rooms` | One row per Telegram group that has ever started the bot (migration v8). Columns: `id` (Telegram `chat_id`, negative int), `title`, `created_at`. Room 0 is the legacy global placeholder. |
+| `rooms` | One row per Telegram group that has ever started the bot (migration v8). Columns: `id` (Telegram `chat_id`, negative int), `title`, `created_at`, `gatekeeper` (integer 0/1, migration v9 — enables per-room message deletion). Room 0 is the legacy global placeholder. |
 | `room_member_streaks` | Per-room streak counter (migration v8). Columns: `room_id`, `user_id`, `streak`. Replaces the old single-value `last_sender_id` in `game_state`. |
 | `game_state` | Key/value. Holds BM heat state and per-room last-sender keys (`room:ROOM_ID:last_sender`) and lottery jackpot carry-overs (`room:ROOM_ID:lottery_jackpot`). |
 | `messages` | Persisted chat log used to hydrate the feed on load. Has `room_id` column. `user_id=0` rows are system messages (pill UI). |
@@ -201,7 +201,7 @@ All queries are **pre-compiled** on startup in the `stmts` object exported from
 keeps query compilation cost to zero per request and avoids re-parsing.
 
 ```js
-const { db, stmts, upsertUser, requireUser, upsertRoom, requireRoom } = require('../db/database');
+const { db, stmts, upsertUser, requireUser, upsertRoom, requireRoom, setRoomGatekeeper } = require('../db/database');
 ```
 
 New room/streak prepared statements:
@@ -211,6 +211,7 @@ New room/streak prepared statements:
 | `upsertRoom` (function) | `INSERT OR IGNORE` into `rooms`; exported as a helper, not a stmt. |
 | `getRoomById` | Fetches one room by `id`. |
 | `getAllRooms` | Returns all rows from `rooms` — used by the per-room scheduler. |
+| `setRoomGatekeeper` | `UPDATE rooms SET gatekeeper = ? WHERE id = ?` — enables/disables per-room message deletion. |
 | `getRoomStreak` | `SELECT streak FROM room_member_streaks WHERE room_id=? AND user_id=?` |
 | `upsertRoomStreak` | Inserts or updates a `room_member_streaks` row. |
 
@@ -382,8 +383,10 @@ Exported:
   no `BOT_TOKEN` is set.
 - `/start` in a **group**: calls `upsertRoom(chat.id, chat.title)` then replies with Mini App button. Each group that uses `/start` automatically gets its own room.
 - `/start` in a **DM**: replies asking the user to add the bot to a group instead.
-- `on('message')` in any group: deletes every message from non-bot users (gatekeeper for all groups the bot is a member of).
-- No `broadcastToGroup` / Telegram mirroring. The bot only deletes messages; the chat lives entirely in the Mini App.
+- `/gatekeeper` in a **group** (admin-only): toggles message deletion on/off for that specific group. When enabling, the bot checks it has the `can_delete_messages` admin permission and refuses with an explanation if not. The setting is persisted in `rooms.gatekeeper`. If the permission is later revoked, the bot auto-disables the gatekeeper and notifies the group.
+- `on('message')`: only deletes messages in groups where `rooms.gatekeeper = 1`. Groups without it enabled are left untouched — Futelo runs as a parallel chat alongside the normal Telegram conversation.
+- In webhook mode (`BOT_MODE=webhook`), `bot.init()` is called before the webhook is registered so that `botInfo` is populated and `handleUpdate` works correctly.
+- No `broadcastToGroup` / Telegram mirroring. The chat lives entirely in the Mini App.
 - Exports: `{ bot }` only.
 
 ### Authentication (`backend/src/bot/auth.js`)
