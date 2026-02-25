@@ -54,12 +54,13 @@ export function useAuth(initData) {
       if (!prev) return prev;
       return {
         ...prev,
-        coins:         patch.newCoins     ?? prev.coins,
-        inventory:     patch.newInventory ?? prev.inventory,
-        lockedLetters: patch.lockedLetter
+        coins:              patch.newCoins          ?? prev.coins,
+        inventory:          patch.newInventory       ?? prev.inventory,
+        lockedLetters:      patch.lockedLetter
           ? [...(prev.lockedLetters || []), patch.lockedLetter]
           : prev.lockedLetters,
-        pickaxeHits:   patch.pickaxeHits  ?? prev.pickaxeHits,
+        pickaxeHits:        patch.pickaxeHits        ?? prev.pickaxeHits,
+        allows_write_to_pm: patch.allows_write_to_pm ?? prev.allows_write_to_pm,
       };
     });
   }, []);

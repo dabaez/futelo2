@@ -173,13 +173,13 @@ picks up the new values on next page load via `GET /api/config`.
 - WAL mode + `synchronous = NORMAL` — safe and fast on the 1 GB droplet.
 - DB file lives at `../../data/futelo.db` relative to `database.js`
   (i.e. `futelo/data/futelo.db`). The `data/` directory is created on first run.
-- **Current schema version: 8** (migrations v1–v8 applied automatically on startup).
+- **Current schema version: 10** (migrations v1–v10 applied automatically on startup).
 
 #### Tables
 
 | Table | Purpose |
 |---|---|
-| `users` | One row per Telegram user. `inventory_json` is a JSON string `{"a":3,"b":1,...}`. `pickaxe_hits` integer counter (migration v7). Special row: `id=0` (`username='sistema'`) for system messages. |
+| `users` | One row per Telegram user. `inventory_json` is a JSON string `{"a":3,"b":1,...}`. `pickaxe_hits` integer counter (migration v7). `allows_write_to_pm` integer 0/1 (migration v10) — set when user grants Telegram write access for push notifications. Special row: `id=0` (`username='sistema'`) for system messages. |
 | `rooms` | One row per Telegram group that has ever started the bot (migration v8). Columns: `id` (Telegram `chat_id`, negative int), `title`, `created_at`, `gatekeeper` (integer 0/1, migration v9 — enables per-room message deletion). Room 0 is the legacy global placeholder. |
 | `room_member_streaks` | Per-room streak counter (migration v8). Columns: `room_id`, `user_id`, `streak`. Replaces the old single-value `last_sender_id` in `game_state`. |
 | `game_state` | Key/value. Holds BM heat state and per-room last-sender keys (`room:ROOM_ID:last_sender`) and lottery jackpot carry-overs (`room:ROOM_ID:lottery_jackpot`). |
@@ -214,6 +214,8 @@ New room/streak prepared statements:
 | `setRoomGatekeeper` | `UPDATE rooms SET gatekeeper = ? WHERE id = ?` — enables/disables per-room message deletion. |
 | `getRoomStreak` | `SELECT streak FROM room_member_streaks WHERE room_id=? AND user_id=?` |
 | `upsertRoomStreak` | Inserts or updates a `room_member_streaks` row. |
+| `setUserWriteAccess` | `UPDATE users SET allows_write_to_pm = 1 WHERE id = ?` — records push-notification opt-in. |
+| `getRoomMembersWithWriteAccess` | Returns `id` of all room members (excluding a given sender) who have `allows_write_to_pm = 1`. Used by the message handler to find who should receive a Telegram DM. |
 
 P2P market prepared statements (also in `stmts`):
 
@@ -427,6 +429,7 @@ All endpoints are defined in `server.js`.
 | GET | `/api/lottery/active?roomId=R` | none | Active round + bets for room R (or `{ round: null }`) |
 | POST | `/api/mine/buy` | initData header | Buy a pickaxe — deduct `PICKAXE_COST`, add `PICKAXE_HITS` swings |
 | POST | `/api/mine/swing` | initData header | Swing once — 40% chance to find a random letter |
+| POST | `/api/notifications/enable` | initData header | Record that the user has granted write access — sets `allows_write_to_pm = 1` |
 
 Auth is sent as the `x-init-data` HTTP header **or** `body.initData`.
 
@@ -504,7 +507,7 @@ window.Telegram.WebApp.disableVerticalSwipes?.();
 ```
 App.jsx
  ├── initData (useState)          ← null → DevUserPicker; set → chat
- ├── useAuth(initData)            ← user profile, coins, inventory, locks, pickaxeHits, chatId
+ ├── useAuth(initData)            ← user profile, coins, inventory, locks, pickaxeHits, chatId, allows_write_to_pm
  ├── useSocket(initData)          ← socket, connected, sendMessage()
  ├── ChatFeed                     ← chatId prop; reads socket for new_message events
  ├── PromptBanner                 ← prompt, promptReplies, replyMode, handleVote
@@ -518,6 +521,11 @@ App.jsx
 `shopClicksRef` (count) and `shopClickTimerRef` (timeout) refs. Click 1 opens
 `ShopModal` and starts a 1500 ms reset timer. If a 3rd click arrives within
 that window, `ShopModal` is closed and `BlackMarketModal` opens instead.
+
+`handleNotificationsToggle` in `App.jsx` calls `Telegram.WebApp.requestWriteAccess()` (native
+Telegram permission dialog); on approval it calls `POST /api/notifications/enable` and sets
+`allows_write_to_pm` in local user state. The 🔕/🔔 bell in `Header.jsx` reflects this flag.
+In dev mode (no TG SDK) the permission step is skipped.
 
 Socket events App.jsx handles:
 - `user_update` → `updateUser(patch)`.
@@ -533,7 +541,7 @@ Socket events App.jsx handles:
 `updateUser(patch)` (from `useAuth`) is the single function for applying
 server-pushed state changes. Call it whenever a socket `user_update` event
 or a shop/mine AJAX response arrives. Handles: `newCoins`, `newInventory`,
-`lockedLetter`, `pickaxeHits`.
+`lockedLetter`, `pickaxeHits`, `allows_write_to_pm`.
 
 `useAuth(initData)` now also returns `chatId` (Telegram `chat_id` from the auth
 response). `App.jsx` passes `chatId` as a prop to `ChatFeed`, `ShopModal`,
@@ -772,6 +780,8 @@ Chat IDs for different tabs.
 
 | Pitfall | Fix |
 |---|---|
+| Profile pictures appear huge | Was caused by dynamic `w-${size}` Tailwind class that the purger strips. Fixed: `Avatar` uses static `w-8 h-8` class strings. |
+| Push notification bell has no effect | User must have previously sent `/start` to the bot in a **private DM** (not a group). Without that, `bot.api.sendMessage` gets a 403 and the error is silently swallowed. |
 | `requireUser(id)` throws "not found" | The user must call `/start` (or `/api/auth`) before any game action. In dev mode the picker auto-upserts on `POST /api/auth`. |
 | Socket connects but `user_update` never fires | Check that the client joined before the message was processed. The personal room is `user:USER_ID` — confirm `socket.join` ran. |
 | Letter key stays disabled after shop roll | `ShopModal` calls `onPurchase(result)` → `updateUser({ newInventory })` in `App.jsx`. If the prop chain breaks, the keyboard won't re-render. |

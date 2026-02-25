@@ -287,6 +287,38 @@ export default function App() {
     socket?.emit('vote_reply', { replyId });
   }, [socket]);
 
+  // ── Telegram push notification opt-in ────────────────────────────────
+  const handleNotificationsToggle = useCallback(() => {
+    if (user?.allows_write_to_pm) {
+      showToast('Las notificaciones ya están activadas 🔔', 'info');
+      return;
+    }
+    const twa = window.Telegram?.WebApp;
+    const enable = () => {
+      fetch('/api/notifications/enable', {
+        method: 'POST',
+        headers: { 'x-init-data': initData },
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.ok) {
+            updateUser({ allows_write_to_pm: 1 });
+            showToast('¡Notificaciones activadas! 🔔', 'success');
+          }
+        })
+        .catch(() => showToast('No se pudo activar. Intenta de nuevo.', 'error'));
+    };
+    if (twa?.requestWriteAccess) {
+      twa.requestWriteAccess((granted) => {
+        if (granted) enable();
+        else showToast('Permiso denegado. Sin notificaciones.', 'warn');
+      });
+    } else {
+      // Dev mode / browser without TG SDK — enable directly
+      enable();
+    }
+  }, [user, initData, updateUser]);
+
   // ── Triple-tap shop button → secret black market ─────────────────────
   const handleShopClick = useCallback(() => {
     shopClicksRef.current += 1;
@@ -412,6 +444,8 @@ export default function App() {
         onShopOpen={handleShopClick}
         onLotteryOpen={() => setLotteryOpen(true)}
         hasActiveLottery={!!lotteryRound}
+        notificationsEnabled={!!user?.allows_write_to_pm}
+        onNotificationsToggle={handleNotificationsToggle}
       />
 
       {/* ── Dev identity banner (only shown outside Telegram) ──────────── */}

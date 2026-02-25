@@ -561,6 +561,15 @@ app.post('/api/mine/swing', authMiddleware, (req, res) => {
   }
 });
 
+// ── POST /api/notifications/enable ─────────────────────────────────────────
+// Called by the frontend after the user grants write access via
+// Telegram.WebApp.requestWriteAccess(). Records consent so the bot can send
+// push notifications when the user is offline.
+app.post('/api/notifications/enable', authMiddleware, (req, res) => {
+  stmts.setUserWriteAccess.run(req.tgUser.id);
+  res.json({ ok: true });
+});
+
 // ── Socket.io ─────────────────────────────────────────────────────────────
 io.use(socketAuth);
 
@@ -609,6 +618,18 @@ io.on('connection', (socket) => {
       if (text.toLowerCase().includes('mercado negro')) {
         const newHeat = addHeat(config.BM_HEAT_CHAT_INCREMENT);
         io.to(`room:${roomId}`).emit('bm_heat_update', { heat: newHeat, catchProb: catchProbability(newHeat) });
+      }
+
+      // ── Telegram push notifications to offline opt-in members ─────────────────────
+      const senderName = user.first_name || user.username || 'Alguien';
+      const preview    = text.length > 60 ? `${text.slice(0, 57)}…` : text;
+      const pushText   = `💬 ${senderName}: ${preview}`;
+      const members = stmts.getRoomMembersWithWriteAccess.all(roomId, userId);
+      for (const { id: memberId } of members) {
+        const isOnline = (io.sockets.adapter.rooms.get(`user:${memberId}`)?.size ?? 0) > 0;
+        if (!isOnline) {
+          sendTelegramNotification(memberId, pushText);
+        }
       }
     } catch (err) {
       socket.emit('rejected_message', { reason: err.message });
@@ -724,6 +745,23 @@ function notifyUser(userId, text, type = 'info') {
   if (roomSize > 0) {
     io.to(`user:${userId}`).emit('notification', { text, type });
     stmts.markNotificationDelivered.run(notifId);
+  }
+}
+
+/**
+ * Send a Telegram Bot DM to a user who has granted write access.
+ * Silently ignored if the bot is not available or the user has never DM'd it.
+ *
+ * @param {number} userId
+ * @param {string} text
+ */
+async function sendTelegramNotification(userId, text) {
+  if (!bot) return;
+  try {
+    await bot.api.sendMessage(userId, text);
+  } catch (err) {
+    // User may not have started a DM with the bot — silently ignore
+    console.warn(`[TG Push] Could not notify user ${userId}: ${err.message}`);
   }
 }
 

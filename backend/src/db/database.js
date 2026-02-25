@@ -98,7 +98,7 @@ db.exec(`
 // Migrations never need to be run manually — they apply automatically on startup.
 //
 // IMPORTANT: never edit a past migration. Always append a new one.
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 
 const migrations = [
   // ── v1: P2P letter market ─────────────────────────────────────────────────
@@ -272,6 +272,13 @@ const migrations = [
   // v9 – per-room gatekeeper flag
   () => {
     db.exec(`ALTER TABLE rooms ADD COLUMN gatekeeper INTEGER NOT NULL DEFAULT 0`);
+  },
+
+  // v10 – opt-in Telegram push notifications
+  // Users who have granted write access to the bot (via requestWriteAccess)
+  // get a Telegram DM when someone posts in their room and they are offline.
+  () => {
+    db.exec('ALTER TABLE users ADD COLUMN allows_write_to_pm INTEGER NOT NULL DEFAULT 0');
   },
 ];
 
@@ -473,6 +480,18 @@ const stmts = {
   upsertRoomStreak: db.prepare(`
     INSERT INTO room_member_streaks (room_id, user_id, streak) VALUES (?, ?, ?)
     ON CONFLICT(room_id, user_id) DO UPDATE SET streak = excluded.streak
+  `),
+
+  // ── Push notification opt-in ───────────────────────────────────────────────
+  setUserWriteAccess: db.prepare(
+    'UPDATE users SET allows_write_to_pm = 1 WHERE id = ?'
+  ),
+  // Returns user IDs of room members (excluding the sender) who have opted in
+  getRoomMembersWithWriteAccess: db.prepare(`
+    SELECT u.id
+    FROM room_member_streaks rms
+    JOIN users u ON u.id = rms.user_id
+    WHERE rms.room_id = ? AND rms.user_id != ? AND u.allows_write_to_pm = 1
   `),
 };
 

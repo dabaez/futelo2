@@ -18,9 +18,9 @@ const TIER_META = {
   3: { label: '🚫 Penalización',       color: 'text-red-400'     },
 };
 
-function Avatar({ photoUrl, firstName, size = 8 }) {
+function Avatar({ photoUrl, firstName }) {
   const initials = (firstName || '?').charAt(0).toUpperCase();
-  const cls = `w-${size} h-${size} rounded-full flex-shrink-0 self-start flex items-center justify-center text-sm font-semibold text-white select-none`;
+  const cls = 'w-8 h-8 rounded-full flex-shrink-0 self-start flex items-center justify-center text-sm font-semibold text-white select-none';
 
   if (photoUrl) {
     return <img src={photoUrl} alt={firstName} className={`${cls} object-cover`} />;
@@ -64,7 +64,6 @@ export default function MessageBubble({ message, isOwn }) {
         <Avatar
           photoUrl={message.photoUrl}
           firstName={message.firstName || message.username}
-          size={8}
         />
       )}
 

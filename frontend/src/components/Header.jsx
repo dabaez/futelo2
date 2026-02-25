@@ -4,7 +4,7 @@ import React from 'react';
  * Top header bar – displays the Futelo logo, coin balance, and connection
  * indicator on a single row.
  */
-export default function Header({ coins, connected, onShopOpen, onLotteryOpen, hasActiveLottery }) {
+export default function Header({ coins, connected, onShopOpen, onLotteryOpen, hasActiveLottery, notificationsEnabled, onNotificationsToggle }) {
   return (
     <header className="flex items-center justify-between px-3 py-2 bg-tg-bg border-b border-tg-bg-sec">
       {/* Brand */}
@@ -15,12 +15,20 @@ export default function Header({ coins, connected, onShopOpen, onLotteryOpen, ha
         <span className={`w-2 h-2 rounded-full ml-1 ${connected ? 'bg-emerald-400' : 'bg-gray-400'}`} />
       </div>
 
-      {/* Right side: coins + lottery + shop */}
+      {/* Right side: coins + notifications + lottery + shop */}
       <div className="flex items-center gap-2">
         <div className="bg-tg-bg-sec rounded-full px-3 py-1 flex items-center gap-1">
           <span className="text-sm">🪙</span>
           <span className="text-sm font-bold text-tg-text">{coins ?? '…'}</span>
         </div>
+        {/* Notifications toggle */}
+        <button
+          onClick={onNotificationsToggle}
+          title={notificationsEnabled ? 'Notificaciones activadas' : 'Activar notificaciones'}
+          className="text-xs font-semibold px-2 py-1.5 rounded-full active:opacity-80 transition-opacity bg-tg-bg-sec text-tg-text"
+        >
+          {notificationsEnabled ? '🔔' : '🕕'}
+        </button>
         <button
           onClick={onLotteryOpen}
           className={`text-xs font-semibold px-3 py-1.5 rounded-full active:opacity-80 transition-opacity relative
