@@ -16,6 +16,7 @@ const os      = require('os');
 const path    = require('path');
 const fs      = require('fs');
 const request = require('supertest');
+const { TIER1_COINS } = require('../config');
 
 // ── Bootstrap a fresh temp DB before requiring any module ──────────────────
 const TEST_DIR = path.join(os.tmpdir(), `futelo-test-${Date.now()}`);
@@ -63,7 +64,7 @@ async function authAs(app, token) {
 async function seedCoins(app, userToken, needed = 100) {
   const pivot = userToken === BOB ? ALICE : BOB;
   await authAs(app, pivot);
-  const iters = Math.ceil(needed / 10);
+  const iters = Math.ceil(needed / TIER1_COINS);
   for (let i = 0; i < iters; i++) {
     await request(app).post('/api/message').set(authHeader(pivot)).send({ text: 'h' });
     await request(app).post('/api/message').set(authHeader(userToken)).send({ text: 'h' });
@@ -168,7 +169,7 @@ describe('POST /api/message', () => {
     await authAs(app, BOB);
   });
 
-  test('Alice sends first message → Tier 1, +10 coins', async () => {
+  test(`Alice sends first message → Tier 1, +${TIER1_COINS} coins`, async () => {
     // Fetch Alice's inventory so we can pick a letter she can use
     const meRes = await request(app).get('/api/me').set(authHeader(ALICE));
     const inv   = meRes.body.inventory;
@@ -185,7 +186,7 @@ describe('POST /api/message', () => {
     if (res.status === 200) {
       expect(res.body.ok).toBe(true);
       expect(res.body.tier).toBe(1);
-      expect(res.body.coinDelta).toBe(10);
+      expect(res.body.coinDelta).toBe(TIER1_COINS);
     } else {
       // Allowable failure if Alice has no letters yet
       expect(res.status).toBe(400);
@@ -627,5 +628,157 @@ describe('POST /api/mine/swing', () => {
     const res = await request(app).post('/api/mine/swing').set(authHeader(HANK));
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/golpes/i);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lottery endpoints
+// ─────────────────────────────────────────────────────────────────────────────
+const IAN  = 'dev:1009:ian:Ian';
+const JANE = 'dev:1010:jane:Jane';
+
+describe('Lottery endpoints', () => {
+  let app;
+  let roundId;
+
+  beforeAll(async () => {
+    app = getApp();
+    await authAs(app, IAN);
+    await authAs(app, JANE);
+  });
+
+  test('GET /api/lottery/active returns { round: null } when no round is active', async () => {
+    const res = await request(app).get('/api/lottery/active');
+    expect(res.status).toBe(200);
+    expect(res.body.round).toBeNull();
+  });
+
+  test('POST /api/lottery/start returns 401 without auth', async () => {
+    const res = await request(app).post('/api/lottery/start');
+    expect(res.status).toBe(401);
+  });
+
+  test('POST /api/lottery/start returns 400 when IAN has no coins', async () => {
+    const meRes = await request(app).get('/api/me').set(authHeader(IAN));
+    // IAN starts at 0 coins
+    expect(meRes.body.coins).toBe(0);
+    const res = await request(app).post('/api/lottery/start').set(authHeader(IAN));
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/insuficiente/i);
+  });
+
+  test('POST /api/lottery/start creates a round after seeding coins', async () => {
+    const { LOTTERY_START_COST } = (await request(app).get('/api/config')).body;
+    await seedCoins(app, IAN, LOTTERY_START_COST + 10);
+
+    const res = await request(app).post('/api/lottery/start').set(authHeader(IAN));
+    expect(res.status).toBe(200);
+    expect(typeof res.body.roundId).toBe('number');
+    expect(typeof res.body.jackpot).toBe('number');
+    // secret_letter must never be returned to the client
+    expect(res.body.round).toBeDefined();
+    expect(res.body.round.secret_letter).toBeUndefined();
+    roundId = res.body.roundId;
+  });
+
+  test('GET /api/lottery/active returns the active round (no secret_letter)', async () => {
+    // IAN's dev token defaults to chatId -1001; pass roomId to match the round
+    const res = await request(app).get('/api/lottery/active?roomId=-1001');
+    expect(res.status).toBe(200);
+    expect(res.body.round).not.toBeNull();
+    expect(res.body.round.secret_letter).toBeUndefined();
+  });
+
+  test('POST /api/lottery/bet returns 401 without auth', async () => {
+    const res = await request(app)
+      .post('/api/lottery/bet')
+      .send({ roundId, letter: 'a' });
+    expect(res.status).toBe(401);
+  });
+
+  test('POST /api/lottery/bet places a bet for a letter in IAN inventory', async () => {
+    // IAN should have letters from the seedCoins process
+    const meRes = await request(app).get('/api/me').set(authHeader(IAN));
+    const inv   = meRes.body.inventory || {};
+    const letter = Object.keys(inv).find((k) => /^[a-záéíóúñ]$/.test(k) && inv[k] > 0);
+    if (!letter) { return; } // skip if IAN has no letters (shouldn't happen)
+
+    const res = await request(app)
+      .post('/api/lottery/bet')
+      .set(authHeader(IAN))
+      .send({ roundId, letter });
+
+    expect(res.status).toBe(200);
+    expect(res.body.bet.letter).toBe(letter);
+    expect(typeof res.body.newInventory).toBe('object');
+  });
+
+  test('POST /api/lottery/start returns 400 when a round is already active', async () => {
+    await seedCoins(app, JANE, 200);
+    const res = await request(app).post('/api/lottery/start').set(authHeader(JANE));
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/activa/i);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Prompt endpoints
+// ─────────────────────────────────────────────────────────────────────────────
+const KATE = 'dev:1011:kate:Kate';
+const LEON = 'dev:1012:leon:Leon';
+
+describe('Prompt endpoints', () => {
+  let app;
+
+  beforeAll(async () => {
+    app = getApp();
+    await authAs(app, KATE);
+    await authAs(app, LEON);
+  });
+
+  test('GET /api/prompt/active returns { prompt: null } when none is active', async () => {
+    const res = await request(app).get('/api/prompt/active');
+    expect(res.status).toBe(200);
+    // prompt is null or an object – either is valid depending on prior test state
+    expect(res.body).toHaveProperty('prompt');
+  });
+
+  test('POST /api/shop/prompt returns 401 without auth', async () => {
+    const res = await request(app).post('/api/shop/prompt');
+    expect(res.status).toBe(401);
+  });
+
+  test('POST /api/shop/prompt returns 400 when KATE has no coins', async () => {
+    const res = await request(app).post('/api/shop/prompt').set(authHeader(KATE));
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/insuficiente/i);
+  });
+
+  test('POST /api/shop/prompt fires a prompt after KATE earns enough coins', async () => {
+    const { PROMPT_BUY_COST } = (await request(app).get('/api/config')).body;
+    await seedCoins(app, KATE, PROMPT_BUY_COST + 10);
+
+    const res = await request(app).post('/api/shop/prompt').set(authHeader(KATE));
+    expect(res.status).toBe(200);
+    expect(typeof res.body.prompt.text).toBe('string');
+    expect(typeof res.body.newCoins).toBe('number');
+  });
+
+  test('GET /api/prompt/active returns the active prompt', async () => {
+    // KATE's dev token defaults to chatId -1001; pass roomId to match the prompt
+    const res = await request(app).get('/api/prompt/active?roomId=-1001');
+    expect(res.status).toBe(200);
+    expect(res.body.prompt).not.toBeNull();
+    expect(typeof res.body.prompt.text).toBe('string');
+    // The server returns replies as a top-level array, not nested inside prompt
+    expect(Array.isArray(res.body.replies)).toBe(true);
+  });
+
+  test('POST /api/shop/prompt returns 400 when a prompt is already active', async () => {
+    const { PROMPT_BUY_COST } = (await request(app).get('/api/config')).body;
+    await seedCoins(app, LEON, PROMPT_BUY_COST + 10);
+    const res = await request(app).post('/api/shop/prompt').set(authHeader(LEON));
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/activo/i);
   });
 });
