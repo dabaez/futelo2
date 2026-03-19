@@ -17,7 +17,7 @@
  *   bmListLetter / bmBuyListing / bmCancelListing / getBmOpenListings / getBmUserListings
  */
 
-const { db, stmts, requireUser } = require('../db/database');
+const { db, stmts, requireUser, requireRoomMember } = require('../db/database');
 const { SELL_BASE_PRICE, MARKET_MAX_PRICE, MAX_LETTER_LEVEL, MARKET_COMMISSION } = require('../config');
 
 // ── Validation helper ─────────────────────────────────────────────────────
@@ -47,13 +47,13 @@ function makeMarket(s, commission = 0) {
       throw new Error(`El precio debe estar entre 1 y ${MARKET_MAX_PRICE} monedas.`);
     }
     return db.transaction(() => {
-      const seller  = requireUser(sellerId);
-      const inv     = JSON.parse(seller.inventory_json);
+      const rm  = requireRoomMember(sellerId, roomId);
+      const inv = JSON.parse(rm.inventory_json);
       const current = inv[letter] ?? 0;
       if (current <= 0) throw new Error(`Sin inventario de "${letter}" para listar.`);
       inv[letter] = current - 1;
       if (inv[letter] === 0) delete inv[letter];
-      stmts.updateInventory.run(JSON.stringify(inv), sellerId);
+      stmts.updateRoomInventory.run(JSON.stringify(inv), roomId, sellerId);
       const result = s.insert.run(sellerId, letter, priceInt, roomId);
       return { listingId: result.lastInsertRowid, letter, price: priceInt, newInventory: inv };
     })();
@@ -66,43 +66,44 @@ function makeMarket(s, commission = 0) {
       if (!listing) throw new Error('Listado no encontrado.');
       if (listing.status !== 'open') throw new Error('Este listado ya no está disponible.');
       if (listing.seller_id === buyerId) throw new Error('No puedes comprar tu propio listado.');
-      const buyer = requireUser(buyerId);
+      const rmId  = listing.room_id;
+      const buyer = requireRoomMember(buyerId, rmId);
       if ((buyer.coins ?? 0) < listing.price) {
         throw new Error(`Monedas insuficientes. Necesitas ${listing.price} 🪙.`);
       }
       const sellerReceives = Math.floor(listing.price * (1 - commission));
-      stmts.updateCoins.run(-listing.price,   buyerId);
-      stmts.updateCoins.run( sellerReceives,  listing.seller_id);
-      const buyerFresh = requireUser(buyerId);
-      const inv = JSON.parse(buyerFresh.inventory_json);
+      stmts.updateRoomCoins.run(-listing.price,  rmId, buyerId);
+      stmts.updateRoomCoins.run( sellerReceives, rmId, listing.seller_id);
+      const buyerRm = stmts.getRoomMember.get(rmId, buyerId);
+      const inv = JSON.parse(buyerRm.inventory_json);
       inv[listing.letter] = Math.min((inv[listing.letter] ?? 0) + 1, MAX_LETTER_LEVEL);
-      stmts.updateInventory.run(JSON.stringify(inv), buyerId);
+      stmts.updateRoomInventory.run(JSON.stringify(inv), rmId, buyerId);
       const now = Math.floor(Date.now() / 1000);
       s.resolve.run('sold', buyerId, now, listingId);
-      const buyerUpdated = requireUser(buyerId);
+      const buyerUpdated = stmts.getRoomMember.get(rmId, buyerId);
       return {
         listingId,
         letter:         listing.letter,
         price:          listing.price,
         sellerReceives,
         sellerId:       listing.seller_id,
+        roomId:         rmId,
         newInventory:   inv,
         newCoins:       buyerUpdated.coins,
       };
     })();
   }
-
-  function cancelListing(sellerId, listingId) {
-    requireUser(sellerId);
+  function cancelListing(sellerId, listingId) {    requireUser(sellerId);
     return db.transaction(() => {
       const listing = s.getListing.get(listingId);
       if (!listing) throw new Error('Listado no encontrado.');
       if (listing.seller_id !== sellerId) throw new Error('No puedes cancelar el listado de otro jugador.');
       if (listing.status !== 'open') throw new Error('Este listado ya no está activo.');
-      const seller = requireUser(sellerId);
-      const inv = JSON.parse(seller.inventory_json);
+      const rmId = listing.room_id;
+      const rm   = requireRoomMember(sellerId, rmId);
+      const inv  = JSON.parse(rm.inventory_json);
       inv[listing.letter] = Math.min((inv[listing.letter] ?? 0) + 1, MAX_LETTER_LEVEL);
-      stmts.updateInventory.run(JSON.stringify(inv), sellerId);
+      stmts.updateRoomInventory.run(JSON.stringify(inv), rmId, sellerId);
       const now = Math.floor(Date.now() / 1000);
       s.resolve.run('cancelled', null, now, listingId);
       return { listingId, letter: listing.letter, newInventory: inv };

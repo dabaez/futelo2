@@ -23,7 +23,7 @@ module.exports = {
   TIER1_COINS: 10,
   // Tier 2: same user, streak == 2 → 0 coins, 0 letters (warning only)
   /** Coins deducted when the same user sends 3+ consecutive messages (Tier 3). */
-  TIER3_PENALTY: 50,
+  TIER3_PENALTY: 30,
   /** How long (seconds) a locked letter stays locked after a Tier-3 penalty. */
   LOCK_DURATION_SEC: 5 * 60,        // 5 minutes
 

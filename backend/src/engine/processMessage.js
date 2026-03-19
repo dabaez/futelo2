@@ -22,7 +22,7 @@
  *   through the shop.
  */
 
-const { db, stmts, requireUser } = require('../db/database');
+const { db, stmts, requireUser, requireRoomMember } = require('../db/database');
 const {
   LOCK_DURATION_SEC,
   ROLL_COST,
@@ -137,19 +137,20 @@ function processMessage(userId, text, roomId = 0) {
     throw new Error('El mensaje no puede estar vacío.');
   }
 
-  // ── Step 1: Fetch user (throws if absent) ──────────────────────────────────
-  const user = requireUser(userId);
-  const inventory = JSON.parse(user.inventory_json || '{}');
+  // ── Step 1: Fetch user identity + room-scoped game state ────────────────────────
+  requireUser(userId);  // validates global identity exists
+  const rm        = requireRoomMember(userId, roomId);
+  const inventory = JSON.parse(rm.inventory_json || '{}');
   const nowSec = Math.floor(Date.now() / 1000);
 
-  // ── Step 1b: First-message check ──────────────────────────────────────────
-  const isFirstMessage = stmts.getUserMessageCount.get(userId).cnt === 0;
+  // ── Step 1b: First-message check (per room) ──────────────────────────────
+  const isFirstMessage = stmts.getRoomMemberMessageCount.get(userId, roomId).cnt === 0;
 
   // ── Step 2: Letter requirements ───────────────────────────────────────────
   const req = letterRequirements(text);
 
   // ── Step 3: Active letter locks ───────────────────────────────────────────
-  const locks = stmts.getLocks.all(userId, nowSec);
+  const locks = stmts.getLocks.all(roomId, userId, nowSec);
   const lockedSet = new Set(locks.map((r) => r.letter));
 
   // ── Step 4: Inventory validation ─────────────────────────────────────────
@@ -212,10 +213,10 @@ function processMessage(userId, text, roomId = 0) {
   // ── Step 5b: Block Tier-3 if user cannot cover the penalty ───────────────
   // We check this BEFORE the transaction so the message is fully rejected and
   // no DB state is modified when the user is too broke to spam.
-  if (tier === 3 && user.coins < TIER3_PENALTY) {
+  if (tier === 3 && rm.coins < TIER3_PENALTY) {
     throw new Error(
       `No puedes enviar otro mensaje seguido: la penalización sería de ${TIER3_PENALTY} 🪙 ` +
-      `pero solo tienes ${user.coins} 🪙. ¡Deja hablar a alguien más primero!`
+      `pero solo tienes ${rm.coins} 🪙. ¡Deja hablar a alguien más primero!`
     );
   }
 
@@ -227,17 +228,17 @@ function processMessage(userId, text, roomId = 0) {
       updatedInventory[letter] = Math.min((updatedInventory[letter] || 0) + 1, MAX_LETTER_LEVEL);
     }
 
-    // Persist user state (coins + inventory; streak written per-room below)
-    stmts.updateUser.run({
+    // Persist room-scoped game state (coins + inventory)
+    stmts.updateRoomMember.run({
       coinDelta,
-      streak:    newStreak,  // kept for backward-compat with any direct users.streak_count reads
       inventory: JSON.stringify(updatedInventory),
+      roomId,
       userId,
     });
 
     // Apply letter lock if Tier 3
     if (lockedLetter) {
-      stmts.upsertLock.run(userId, lockedLetter, nowSec + LOCK_DURATION_SEC);
+      stmts.upsertLock.run(roomId, userId, lockedLetter, nowSec + LOCK_DURATION_SEC);
     }
 
     // Advance per-room last-sender and streak
@@ -256,7 +257,7 @@ function processMessage(userId, text, roomId = 0) {
     stmts.cleanLocks.run(nowSec);
 
     // Reread final coins from DB for accuracy
-    const fresh = stmts.getUser.get(userId);
+    const fresh = stmts.getRoomMember.get(roomId, userId);
 
     return {
       success:      true,
@@ -294,12 +295,13 @@ function rollRarity() {
   return LOOTBOX_TIERS[LOOTBOX_TIERS.length - 1];
 }
 
-function shopRoll(userId) {
-  const user      = requireUser(userId);
-  const inventory = JSON.parse(user.inventory_json || '{}');
+function shopRoll(userId, roomId = 0) {
+  requireUser(userId);
+  const rm        = requireRoomMember(userId, roomId);
+  const inventory = JSON.parse(rm.inventory_json || '{}');
   const rollCost  = computeRollCost(inventory);
 
-  if (user.coins < rollCost) {
+  if (rm.coins < rollCost) {
     throw new Error(`Monedas insuficientes. La tirada cuesta ${rollCost} 🪙 con tu inventario actual.`);
   }
 
@@ -312,11 +314,11 @@ function shopRoll(userId) {
   }
 
   db.transaction(() => {
-    stmts.updateCoins.run(-rollCost, userId);
-    stmts.updateInventory.run(JSON.stringify(updatedInventory), userId);
+    stmts.updateRoomCoins.run(-rollCost, roomId, userId);
+    stmts.updateRoomInventory.run(JSON.stringify(updatedInventory), roomId, userId);
   })();
 
-  const fresh = stmts.getUser.get(userId);
+  const fresh = stmts.getRoomMember.get(roomId, userId);
 
   return {
     newLetters,

@@ -13,7 +13,7 @@
  * Jackpot carry-over is stored in game_state under 'lottery_jackpot'.
  */
 
-const { db, stmts, requireUser } = require('../db/database');
+const { db, stmts, requireUser, requireRoomMember } = require('../db/database');
 const {
   LOTTERY_START_COST,
   LOTTERY_DURATION_SEC,
@@ -78,8 +78,8 @@ function startLottery(userId, roomId = 0) {
   }
 
   return db.transaction(() => {
-    const user = requireUser(userId);
-    if (user.coins < LOTTERY_START_COST) {
+    const rm = requireRoomMember(userId, roomId);
+    if (rm.coins < LOTTERY_START_COST) {
       throw new Error(`Monedas insuficientes. Iniciar la lotería cuesta ${LOTTERY_START_COST} 🪙.`);
     }
     const carryOver    = getCarryOver(roomId);
@@ -87,16 +87,16 @@ function startLottery(userId, roomId = 0) {
     const secretLetter = pickLetter();
     const closesAt     = Math.floor(Date.now() / 1000) + LOTTERY_DURATION_SEC;
 
-    stmts.updateCoins.run(-LOTTERY_START_COST, userId);
-    setCarryOver(0, roomId);  // consumed into this round
+    stmts.updateRoomCoins.run(-LOTTERY_START_COST, roomId, userId);
+    setCarryOver(0, roomId);
     const result  = stmts.insertLotteryRound.run(secretLetter, jackpot, userId, closesAt, roomId);
     const roundId = result.lastInsertRowid;
-    const fresh   = requireUser(userId);
+    const fresh   = stmts.getRoomMember.get(roomId, userId);
     const { secret_letter: _sl, ...roundSafe } = stmts.getLotteryRoundById.get(roundId);
 
     return {
       roundId,
-      round:    { ...roundSafe, bets: [] },  // safe for client; no secret_letter
+      round:    { ...roundSafe, bets: [] },
       jackpot,
       carryOver,
       closesAt,
@@ -129,13 +129,13 @@ function placeBet(userId, roundId, letter) {
       throw new Error('Se acabó el tiempo para apostar en esta ronda.');
     }
 
-    // User must have at least 1 inventory level of this letter
-    const inv = JSON.parse(user.inventory_json);
+    const roundRoomId = round.room_id ?? 0;
+    const rm  = requireRoomMember(userId, roundRoomId);
+    const inv = JSON.parse(rm.inventory_json);
     if ((inv[letter] || 0) < 1) {
       throw new Error(`No tienes "${letter.toUpperCase()}" en tu inventario.`);
     }
 
-    // Escalating error probability: 1 - 0.5^(existing bet count)
     const { count: existingBets } = stmts.getUserBetCountInRound.get(roundId, userId);
     if (existingBets > 0) {
       const errorProb = 1 - Math.pow(0.5, existingBets);
@@ -145,13 +145,12 @@ function placeBet(userId, roundId, letter) {
       }
     }
 
-    // Deduct one level of the guessed letter from inventory
     inv[letter] = Math.max(0, (inv[letter] || 0) - 1);
     if (inv[letter] === 0) delete inv[letter];
-    stmts.updateInventory.run(JSON.stringify(inv), userId);
+    stmts.updateRoomInventory.run(JSON.stringify(inv), roundRoomId, userId);
 
     const betResult = stmts.insertLotteryBet.run(roundId, userId, letter);
-    const fresh     = requireUser(userId);
+    const fresh     = stmts.getRoomMember.get(roundRoomId, userId);
     const bet       = stmts.getLotteryBetById.get(betResult.lastInsertRowid);
 
     return {
@@ -201,23 +200,24 @@ function closeLottery(roundId) {
       const otherBetCount = bets.filter((b) => b.user_id !== winnerId).length;
       const coinsEarned   = round.jackpot + otherBetCount * GAMBLING_COINS_PER_LETTER;
 
-      stmts.updateCoins.run(coinsEarned, winnerId);
+      stmts.updateRoomCoins.run(coinsEarned, roomId, winnerId);
 
+      const winnerRm   = stmts.getRoomMember.get(roomId, winnerId);
       const winnerUser = requireUser(winnerId);
-      const inv        = JSON.parse(winnerUser.inventory_json);
+      const inv        = JSON.parse(winnerRm.inventory_json);
       inv[round.secret_letter] = Math.min(
         (inv[round.secret_letter] || 0) + GAMBLING_WIN_LETTERS,
         MAX_LETTER_LEVEL,
       );
-      stmts.updateInventory.run(JSON.stringify(inv), winnerId);
+      stmts.updateRoomInventory.run(JSON.stringify(inv), roomId, winnerId);
 
-      const fresh = requireUser(winnerId);
+      const freshRm = stmts.getRoomMember.get(roomId, winnerId);
       return {
         userId:       winnerId,
-        username:     fresh.username,
-        firstName:    fresh.first_name,
+        username:     winnerUser.username,
+        firstName:    winnerUser.first_name,
         coinsEarned,
-        newInventory: JSON.parse(fresh.inventory_json),
+        newInventory: JSON.parse(freshRm.inventory_json),
       };
     });
 

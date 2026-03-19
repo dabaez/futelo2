@@ -14,7 +14,7 @@
  *   Runner-up  +30 🪙  (second most, if different user)
  */
 
-const { db, stmts, requireUser } = require('../db/database');
+const { db, stmts, requireUser, requireRoomMember } = require('../db/database');
 const {
   PROMPT_DURATION_SEC,
   PROMPT_WINNER_BONUS,
@@ -63,14 +63,15 @@ function buyPrompt(userId, roomId = 0) {
   }
 
   return db.transaction(() => {
-    const user = requireUser(userId);
-    if (user.coins < PROMPT_BUY_COST) {
-      throw new Error(`Monedas insuficientes. Necesitas ${PROMPT_BUY_COST} 🪙, tienes ${user.coins}.`);
+    const rm = requireRoomMember(userId, roomId);
+    if (rm.coins < PROMPT_BUY_COST) {
+      throw new Error(`Monedas insuficientes. Necesitas ${PROMPT_BUY_COST} 🪙, tienes ${rm.coins}.`);
     }
-    stmts.updateCoins.run(-PROMPT_BUY_COST, userId);
+    stmts.updateRoomCoins.run(-PROMPT_BUY_COST, roomId, userId);
+    const fresh = stmts.getRoomMember.get(roomId, userId);
     const np = startPrompt(roomId);
     return {
-      newCoins: user.coins - PROMPT_BUY_COST,
+      newCoins: fresh.coins,
       prompt:   np,
     };
   })();
@@ -119,8 +120,8 @@ function submitReply(userId, promptId, text) {
   const result = stmts.insertPromptReply.run(promptId, userId, trimmed);
   if (result.changes === 0) throw new Error('Ya respondiste a este prompt.');
 
-  stmts.updateCoins.run(PROMPT_REPLY_BONUS, userId);
-  const fresh = requireUser(userId);
+  stmts.updateRoomCoins.run(PROMPT_REPLY_BONUS, prompt.room_id, userId);
+  const fresh = stmts.getRoomMember.get(prompt.room_id, userId);
 
   const reply = stmts.getPromptReplyById.get(result.lastInsertRowid);
   const user  = fresh;
@@ -180,7 +181,7 @@ function closePrompt(promptId) {
     // Collect all replies that tie for 1st place (votes > 0)
     const topVotes = replies[0].votes;
     const winners  = topVotes > 0 ? replies.filter((r) => r.votes === topVotes) : [];
-    winners.forEach((r) => stmts.updateCoins.run(WINNER_BONUS, r.user_id));
+    winners.forEach((r) => stmts.updateRoomCoins.run(WINNER_BONUS,    prompt.room_id, r.user_id));
 
     // Only award runners-up when there is exactly one winner
     let runnersUp = [];
@@ -190,7 +191,7 @@ function closePrompt(promptId) {
         const secondVotes = remaining[0].votes;
         if (secondVotes > 0) {
           runnersUp = remaining.filter((r) => r.votes === secondVotes);
-          runnersUp.forEach((r) => stmts.updateCoins.run(RUNNER_UP_BONUS, r.user_id));
+          runnersUp.forEach((r) => stmts.updateRoomCoins.run(RUNNER_UP_BONUS, prompt.room_id, r.user_id));
         }
       }
     }

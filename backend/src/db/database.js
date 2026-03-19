@@ -98,7 +98,7 @@ db.exec(`
 // Migrations never need to be run manually — they apply automatically on startup.
 //
 // IMPORTANT: never edit a past migration. Always append a new one.
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 12;
 
 const migrations = [
   // ── v1: P2P letter market ─────────────────────────────────────────────────
@@ -275,10 +275,53 @@ const migrations = [
   },
 
   // v10 – opt-in Telegram push notifications
-  // Users who have granted write access to the bot (via requestWriteAccess)
-  // get a Telegram DM when someone posts in their room and they are offline.
   () => {
     db.exec('ALTER TABLE users ADD COLUMN allows_write_to_pm INTEGER NOT NULL DEFAULT 0');
+  },
+
+  // v11 – Telegram thread mirroring config per room
+  // notify_thread_id: NULL=not configured, 0=main chat, N=specific topic ID
+  // notify_thread_delete: 1=auto-delete user messages posted to that thread
+  () => {
+    db.exec('ALTER TABLE rooms ADD COLUMN notify_thread_id INTEGER');
+    db.exec('ALTER TABLE rooms ADD COLUMN notify_thread_delete INTEGER NOT NULL DEFAULT 0');
+  },
+
+  // v12 – per-room game state (coins, inventory, pickaxe_hits) + per-room letter locks
+  // room_members is the new source of truth for all per-player economy data.
+  // letter_locks gains room_id so Tier-3 penalties are scoped to a room.
+  () => {
+    db.exec(`
+      CREATE TABLE room_members (
+        room_id        INTEGER NOT NULL REFERENCES rooms(id),
+        user_id        INTEGER NOT NULL REFERENCES users(id),
+        coins          INTEGER NOT NULL DEFAULT 0,
+        inventory_json TEXT    NOT NULL DEFAULT '${STARTING_INVENTORY}',
+        pickaxe_hits   INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (room_id, user_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_rm_user ON room_members(user_id);
+    `);
+    // Seed room 0 from existing global user stats for backward compat
+    db.exec(`
+      INSERT OR IGNORE INTO room_members (room_id, user_id, coins, inventory_json, pickaxe_hits)
+      SELECT 0, id, coins, inventory_json, pickaxe_hits FROM users WHERE id != 0;
+    `);
+    // Recreate letter_locks with room_id in the PK (per-room penalties)
+    db.exec(`
+      CREATE TABLE letter_locks_new (
+        room_id      INTEGER NOT NULL DEFAULT 0,
+        user_id      INTEGER NOT NULL REFERENCES users(id),
+        letter       TEXT    NOT NULL,
+        locked_until INTEGER NOT NULL,
+        PRIMARY KEY (room_id, user_id, letter)
+      );
+      INSERT INTO letter_locks_new (room_id, user_id, letter, locked_until)
+        SELECT 0, user_id, letter, locked_until FROM letter_locks;
+      DROP TABLE letter_locks;
+      ALTER TABLE letter_locks_new RENAME TO letter_locks;
+      CREATE INDEX IF NOT EXISTS idx_locks_user ON letter_locks(room_id, user_id, locked_until);
+    `);
   },
 ];
 
@@ -329,8 +372,9 @@ const stmts = {
     ORDER BY m.created_at DESC, m.id DESC
     LIMIT ?
   `),
-  getLocks:       db.prepare('SELECT letter FROM letter_locks WHERE user_id = ? AND locked_until > ?'),
-  upsertLock:     db.prepare('INSERT OR REPLACE INTO letter_locks (user_id, letter, locked_until) VALUES (?, ?, ?)'),
+  getLocks:       db.prepare('SELECT letter FROM letter_locks WHERE room_id = ? AND user_id = ? AND locked_until > ?'),
+  upsertLock:     db.prepare('INSERT OR REPLACE INTO letter_locks (room_id, user_id, letter, locked_until) VALUES (?, ?, ?, ?)'),
+  getRoomMemberMessageCount: db.prepare('SELECT COUNT(*) AS cnt FROM messages WHERE user_id = ? AND room_id = ?'),
   cleanLocks:     db.prepare('DELETE FROM letter_locks WHERE locked_until <= ?'),
   getUserMessageCount: db.prepare('SELECT COUNT(*) AS cnt FROM messages WHERE user_id = ?'),
 
@@ -447,6 +491,40 @@ const stmts = {
     'UPDATE users SET pickaxe_hits = MAX(0, pickaxe_hits - 1) WHERE id = ?'
   ),
 
+  // ── Room members (per-room game state) ────────────────────────────────────
+  upsertRoomMember: db.prepare(
+    'INSERT OR IGNORE INTO room_members (room_id, user_id) VALUES (?, ?)'
+  ),
+  getRoomMember: db.prepare(
+    'SELECT * FROM room_members WHERE room_id = ? AND user_id = ?'
+  ),
+  updateRoomCoins: db.prepare(
+    'UPDATE room_members SET coins = MAX(0, coins + ?) WHERE room_id = ? AND user_id = ?'
+  ),
+  updateRoomInventory: db.prepare(
+    'UPDATE room_members SET inventory_json = ? WHERE room_id = ? AND user_id = ?'
+  ),
+  updateRoomMember: db.prepare(`
+    UPDATE room_members
+    SET coins = MAX(0, coins + @coinDelta),
+        inventory_json = @inventory
+    WHERE room_id = @roomId AND user_id = @userId
+  `),
+  addRoomPickaxeHits: db.prepare(
+    'UPDATE room_members SET pickaxe_hits = MIN(pickaxe_hits + ?, 9999) WHERE room_id = ? AND user_id = ?'
+  ),
+  useRoomPickaxeHit: db.prepare(
+    'UPDATE room_members SET pickaxe_hits = MAX(0, pickaxe_hits - 1) WHERE room_id = ? AND user_id = ?'
+  ),
+
+  // ── Thread mirror config ───────────────────────────────────────────────────
+  setNotifyThread: db.prepare(
+    'UPDATE rooms SET notify_thread_id = ? WHERE id = ?'
+  ),
+  setNotifyThreadDelete: db.prepare(
+    'UPDATE rooms SET notify_thread_delete = ? WHERE id = ?'
+  ),
+
   // ── Notifications ─────────────────────────────────────────────────────────────
   insertNotification: db.prepare(
     'INSERT INTO notifications (user_id, text, type) VALUES (@userId, @text, @type)'
@@ -540,4 +618,26 @@ function setRoomGatekeeper(id, enabled) {
   stmts.setRoomGatekeeper.run(enabled ? 1 : 0, id);
 }
 
-module.exports = { db, stmts, upsertUser, requireUser, upsertRoom, requireRoom, setRoomGatekeeper };
+/**
+ * Ensure a room_members row exists for this user+room and return it.
+ */
+function upsertRoomMember(userId, roomId) {
+  stmts.upsertRoomMember.run(roomId, userId);
+  return stmts.getRoomMember.get(roomId, userId);
+}
+
+/**
+ * Return the room_members row or throw a user-facing error if not found.
+ */
+function requireRoomMember(userId, roomId) {
+  const rm = stmts.getRoomMember.get(roomId, userId);
+  if (!rm) throw new Error(`Usuario ${userId} no encontrado en la sala ${roomId}. Autentícate primero.`);
+  return rm;
+}
+
+module.exports = {
+  db, stmts,
+  upsertUser, requireUser,
+  upsertRoomMember, requireRoomMember,
+  upsertRoom, requireRoom, setRoomGatekeeper,
+};

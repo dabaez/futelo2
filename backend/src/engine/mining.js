@@ -11,7 +11,7 @@
  * used elsewhere in the game.
  */
 
-const { db, stmts, requireUser } = require('../db/database');
+const { db, stmts, requireUser, requireRoomMember } = require('../db/database');
 const {
   PICKAXE_COST,
   PICKAXE_HITS,
@@ -39,21 +39,22 @@ function randomMineLetter() {
  * @param {number} userId
  * @returns {{ newCoins: number, pickaxeHits: number }}
  */
-function buyPickaxe(userId) {
-  const user = requireUser(userId);
+function buyPickaxe(userId, roomId = 0) {
+  requireUser(userId);
+  const rm = requireRoomMember(userId, roomId);
 
-  if (user.coins < PICKAXE_COST) {
+  if (rm.coins < PICKAXE_COST) {
     throw new Error(
       `Monedas insuficientes. Un pico cuesta ${PICKAXE_COST} 🪙.`
     );
   }
 
   db.transaction(() => {
-    stmts.updateCoins.run(-PICKAXE_COST, userId);
-    stmts.addPickaxeHits.run(PICKAXE_HITS, userId);
+    stmts.updateRoomCoins.run(-PICKAXE_COST, roomId, userId);
+    stmts.addRoomPickaxeHits.run(PICKAXE_HITS, roomId, userId);
   })();
 
-  const fresh = stmts.getUser.get(userId);
+  const fresh = stmts.getRoomMember.get(roomId, userId);
   return {
     newCoins:    fresh.coins,
     pickaxeHits: fresh.pickaxe_hits,
@@ -75,34 +76,32 @@ function buyPickaxe(userId) {
  *   hitsLeft:     number,
  * }}
  */
-function swing(userId) {
-  const user = requireUser(userId);
+function swing(userId, roomId = 0) {
+  requireUser(userId);
+  const rm = requireRoomMember(userId, roomId);
 
-  if (user.pickaxe_hits <= 0) {
+  if (rm.pickaxe_hits <= 0) {
     throw new Error('No tienes golpes restantes. Compra un pico para seguir minando.');
   }
 
-  const hit = Math.random() < MINE_HIT_CHANCE;
+  const hit    = Math.random() < MINE_HIT_CHANCE;
   const letter = hit ? randomMineLetter() : null;
 
   let newInventory = null;
 
   db.transaction(() => {
-    stmts.usePickaxeHit.run(userId);
+    stmts.useRoomPickaxeHit.run(roomId, userId);
 
     if (hit) {
-      const inv = JSON.parse(user.inventory_json || '{}');
+      const inv = JSON.parse(rm.inventory_json || '{}');
       inv[letter] = Math.min((inv[letter] || 0) + 1, MAX_LETTER_LEVEL);
-      stmts.updateInventory.run(JSON.stringify(inv), userId);
+      stmts.updateRoomInventory.run(JSON.stringify(inv), roomId, userId);
       newInventory = inv;
     }
   })();
 
-  const fresh = stmts.getUser.get(userId);
+  const fresh = stmts.getRoomMember.get(roomId, userId);
 
-  // If we found a letter, re-read inventory from DB to be safe (the transaction
-  // committed synchronously so fresh row is correct for coins/hits, but
-  // newInventory was set inside the transaction closure already).
   if (hit && !newInventory) {
     newInventory = JSON.parse(fresh.inventory_json || '{}');
   }
