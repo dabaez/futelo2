@@ -26,35 +26,36 @@ let _locks;
 const mockTransaction = jest.fn((fn) => () => fn());
 
 const mockStmts = {
-  getUser:              { get: jest.fn() },
-  getLocks:             { all: jest.fn() },
-  getState:             { get: jest.fn() },
-  setState:             { run: jest.fn() },
-  updateUser:           { run: jest.fn() },
-  updateCoins:          { run: jest.fn() },
-  updateInventory:      { run: jest.fn() },
-  upsertLock:           { run: jest.fn() },
-  cleanLocks:           { run: jest.fn() },
-  insertMessage:        { run: jest.fn(() => ({ lastInsertRowid: 1 })) },
+  getRoomMember:             { get: jest.fn() },
+  getLocks:                  { all: jest.fn() },
+  getState:                  { get: jest.fn() },
+  setState:                  { run: jest.fn() },
+  updateRoomMember:          { run: jest.fn() },
+  updateRoomCoins:           { run: jest.fn() },
+  updateRoomInventory:       { run: jest.fn() },
+  upsertLock:                { run: jest.fn() },
+  cleanLocks:                { run: jest.fn() },
+  insertMessage:             { run: jest.fn(() => ({ lastInsertRowid: 1 })) },
   // Default to cnt=1 (not a first message) so standard tier tests work unchanged.
   // Individual tests can override with mockReturnValueOnce({ cnt: 0 }) to test
   // the first-message letter-grant path.
-  getUserMessageCount:  { get: jest.fn(() => ({ cnt: 1 })) },
+  getRoomMemberMessageCount: { get: jest.fn(() => ({ cnt: 1 })) },
   // Per-room streak tracking (default: no prior streak in room)
-  getRoomStreak:        { get: jest.fn(() => null) },
-  upsertRoomStreak:     { run: jest.fn() },
+  getRoomStreak:             { get: jest.fn(() => null) },
+  upsertRoomStreak:          { run: jest.fn() },
 };
 
 jest.mock('../db/database', () => ({
-  db:          { transaction: mockTransaction },
-  stmts:       mockStmts,
-  requireUser: jest.fn(),
+  db:                 { transaction: mockTransaction },
+  stmts:              mockStmts,
+  requireUser:        jest.fn(),
+  requireRoomMember:  jest.fn(),
 }));
 
 // Import engine AFTER the mock is set up
 const { processMessage, shopRoll, letterRequirements } = require('../engine/processMessage');
-const { requireUser, stmts } = require('../db/database');
-const { MAX_LETTER_LEVEL } = require('../config');
+const { requireUser, requireRoomMember, stmts } = require('../db/database');
+const { MAX_LETTER_LEVEL, TIER1_COINS, TIER3_PENALTY, ROLL_COST, LOCK_DURATION_SEC, FIRST_MESSAGE_LETTERS } = require('../config');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function makeUser(overrides = {}) {
@@ -72,9 +73,10 @@ function makeUser(overrides = {}) {
 function setupUser(user) {
   _user = user;
   requireUser.mockReturnValue(user);
+  requireRoomMember.mockReturnValue(user);
   // Default fresh-read: return the same user so result.newCoins is always defined.
   // Tests that need to assert a specific newCoins value should override this.
-  stmts.getUser.get.mockReturnValue(user);
+  stmts.getRoomMember.get.mockReturnValue(user);
 }
 
 function setupGameState({ lastSenderId = null, locks = [] } = {}) {
@@ -93,7 +95,7 @@ beforeEach(() => {
   // processMessage destructures { lastInsertRowid } from this call
   mockStmts.insertMessage.run.mockReturnValue({ lastInsertRowid: 1 });
   // Default: not a first message (cnt > 0 means the user has sent before)
-  mockStmts.getUserMessageCount.get.mockReturnValue({ cnt: 1 });
+  mockStmts.getRoomMemberMessageCount.get.mockReturnValue({ cnt: 1 });
   // Default: no prior room streak (treated as 0)
   mockStmts.getRoomStreak.get.mockReturnValue(null);
 });
@@ -187,8 +189,8 @@ describe('processMessage – validation', () => {
     // Inventory has exactly p:2 — sending 'pp' should succeed
     setupUser(makeUser({ inventory_json: JSON.stringify({ p: 2 }) }));
     setupGameState({ lastSenderId: 99 }); // different user → Tier 1
-    // Make the second getUser.get call (fresh read inside transaction) return ok
-    stmts.getUser.get.mockReturnValue(makeUser({ coins: 110 }));
+    // Make the second getRoomMember.get call (fresh read inside transaction) return ok
+    stmts.getRoomMember.get.mockReturnValue(makeUser({ coins: 110 }));
     expect(() => processMessage(1, 'pp')).not.toThrow();
   });
 });
@@ -197,28 +199,28 @@ describe('processMessage – validation', () => {
 // processMessage – Tier 1 (different user sent last)
 // ─────────────────────────────────────────────────────────────────────────────
 describe('processMessage – Tier 1 (different user)', () => {
-  test('returns tier 1, +10 coins, 0 new letters', () => {
+  test(`returns tier 1, +${TIER1_COINS} coins, 0 new letters`, () => {
     const user = makeUser({ coins: 100 });
     setupUser(user);
     setupGameState({ lastSenderId: 999 }); // different user
 
-    // Fresh DB read inside transaction returns +10 coins already applied
-    stmts.getUser.get.mockReturnValue({ ...user, coins: 110 });
+    // Fresh DB read inside transaction returns +TIER1_COINS coins already applied
+    stmts.getRoomMember.get.mockReturnValue({ ...user, coins: 100 + TIER1_COINS });
 
     const result = processMessage(1, 'ab');
 
     expect(result.tier).toBe(1);
-    expect(result.coinDelta).toBe(10);
+    expect(result.coinDelta).toBe(TIER1_COINS);
     // Letters are only granted on first message or via shop roll, not per tier.
     expect(result.newLetters).toHaveLength(0);
     expect(result.lockedLetter).toBeNull();
-    expect(result.newCoins).toBe(110);
+    expect(result.newCoins).toBe(100 + TIER1_COINS);
   });
 
   test('streak is reset to 1 after a Tier-1 message', () => {
     setupUser(makeUser({ streak_count: 3 }));
     setupGameState({ lastSenderId: 999 });
-    stmts.getUser.get.mockReturnValue(makeUser({ coins: 110 }));
+    stmts.getRoomMember.get.mockReturnValue(makeUser({ coins: 110 }));
 
     const result = processMessage(1, 'a');
     expect(result.newStreak).toBe(1);
@@ -228,7 +230,7 @@ describe('processMessage – Tier 1 (different user)', () => {
     const invBefore = { a: 1 };
     setupUser(makeUser({ inventory_json: JSON.stringify(invBefore) }));
     setupGameState({ lastSenderId: 999 });
-    stmts.getUser.get.mockReturnValue(makeUser({ coins: 110 }));
+    stmts.getRoomMember.get.mockReturnValue(makeUser({ coins: 110 }));
 
     const result = processMessage(1, 'a');
 
@@ -247,7 +249,7 @@ describe('processMessage – Tier 2 (spam warning)', () => {
     setupUser(makeUser({ streak_count: 1 }));
     setupGameState({ lastSenderId: 1 }); // same user
     stmts.getRoomStreak.get.mockReturnValue({ streak: 1 });
-    stmts.getUser.get.mockReturnValue(makeUser({ coins: 100 }));
+    stmts.getRoomMember.get.mockReturnValue(makeUser({ coins: 100 }));
 
     const result = processMessage(1, 'a');
 
@@ -263,17 +265,17 @@ describe('processMessage – Tier 2 (spam warning)', () => {
 // processMessage – Tier 3 (same user, streak >= 3)
 // ─────────────────────────────────────────────────────────────────────────────
 describe('processMessage – Tier 3 (spam penalty)', () => {
-  test('returns tier 3, -50 coins, a locked letter', () => {
+  test(`returns tier 3, -${TIER3_PENALTY} coins, a locked letter`, () => {
     // Room streak is 2, so next send (same user) makes it 3 → Tier 3
     setupUser(makeUser({ streak_count: 2, inventory_json: JSON.stringify({ a: 3 }) }));
     setupGameState({ lastSenderId: 1 });
     stmts.getRoomStreak.get.mockReturnValue({ streak: 2 });
-    stmts.getUser.get.mockReturnValue(makeUser({ coins: 50 }));
+    stmts.getRoomMember.get.mockReturnValue(makeUser({ coins: 50 }));
 
     const result = processMessage(1, 'a');
 
     expect(result.tier).toBe(3);
-    expect(result.coinDelta).toBe(-50);
+    expect(result.coinDelta).toBe(-TIER3_PENALTY);
     expect(result.newLetters).toHaveLength(0);
     expect(typeof result.lockedLetter).toBe('string');
     expect(result.lockedLetter).toHaveLength(1);
@@ -284,27 +286,28 @@ describe('processMessage – Tier 3 (spam penalty)', () => {
     setupUser(makeUser({ streak_count: 2, inventory_json: JSON.stringify({ b: 2 }) }));
     setupGameState({ lastSenderId: 1 });
     stmts.getRoomStreak.get.mockReturnValue({ streak: 2 });
-    stmts.getUser.get.mockReturnValue(makeUser({ coins: 50 }));
+    stmts.getRoomMember.get.mockReturnValue(makeUser({ coins: 50 }));
 
     const result = processMessage(1, 'b');
 
     expect(stmts.upsertLock.run).toHaveBeenCalledWith(
-      1,
+      expect.any(Number),  // roomId
+      1,                   // userId
       result.lockedLetter,
       expect.any(Number)
     );
     // The locked timestamp should be approximately 5 minutes from now
-    const [,, lockedUntil] = stmts.upsertLock.run.mock.calls[0];
+    const [,,, lockedUntil] = stmts.upsertLock.run.mock.calls[0];
     const nowSec = Math.floor(Date.now() / 1000);
-    expect(lockedUntil).toBeGreaterThan(nowSec + 290);  // at least 4m50s
-    expect(lockedUntil).toBeLessThan(nowSec + 310);     // at most 5m10s
+    expect(lockedUntil).toBeGreaterThan(nowSec + LOCK_DURATION_SEC - 10);
+    expect(lockedUntil).toBeLessThan(nowSec + LOCK_DURATION_SEC + 10);
   });
 
   test('streak keeps increasing beyond 3', () => {
     setupUser(makeUser({ streak_count: 5, inventory_json: JSON.stringify({ a: 5 }) }));
     setupGameState({ lastSenderId: 1 });
     stmts.getRoomStreak.get.mockReturnValue({ streak: 5 });
-    stmts.getUser.get.mockReturnValue(makeUser({ coins: 50 }));
+    stmts.getRoomMember.get.mockReturnValue(makeUser({ coins: 50 }));
 
     const result = processMessage(1, 'a');
     expect(result.tier).toBe(3);
@@ -312,8 +315,8 @@ describe('processMessage – Tier 3 (spam penalty)', () => {
   });
 
   test('throws when user cannot cover the Tier-3 penalty', () => {
-    // User has only 20 coins; penalty is 50 → message is blocked entirely
-    setupUser(makeUser({ streak_count: 2, coins: 20, inventory_json: JSON.stringify({ a: 3 }) }));
+    // User has fewer coins than TIER3_PENALTY → message is blocked entirely
+    setupUser(makeUser({ streak_count: 2, coins: TIER3_PENALTY - 1, inventory_json: JSON.stringify({ a: 3 }) }));
     setupGameState({ lastSenderId: 1 });
     stmts.getRoomStreak.get.mockReturnValue({ streak: 2 });
 
@@ -321,15 +324,48 @@ describe('processMessage – Tier 3 (spam penalty)', () => {
   });
 
   test('allows the message when coins exactly equal the Tier-3 penalty', () => {
-    // User has exactly 50 coins – just enough to pay the penalty
-    setupUser(makeUser({ streak_count: 2, coins: 50, inventory_json: JSON.stringify({ a: 3 }) }));
+    // User has exactly TIER3_PENALTY coins – just enough to pay the penalty
+    setupUser(makeUser({ streak_count: 2, coins: TIER3_PENALTY, inventory_json: JSON.stringify({ a: 3 }) }));
     setupGameState({ lastSenderId: 1 });
     stmts.getRoomStreak.get.mockReturnValue({ streak: 2 });
-    stmts.getUser.get.mockReturnValue(makeUser({ coins: 0 })); // 50 - 50 = 0 after penalty
+    stmts.getRoomMember.get.mockReturnValue(makeUser({ coins: 0 })); // TIER3_PENALTY - TIER3_PENALTY = 0 after penalty
 
     const result = processMessage(1, 'a');
     expect(result.tier).toBe(3);
     expect(result.newCoins).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// processMessage – first-message letter grant
+// ─────────────────────────────────────────────────────────────────────────────
+describe('processMessage – first message bonus', () => {
+  test(`grants FIRST_MESSAGE_LETTERS (${FIRST_MESSAGE_LETTERS}) random letters on a user's very first message`, () => {
+    // User has starting inventory { a: 1 } so validation passes for the message 'a'.
+    // The bonus letters are then granted on top, inside the transaction.
+    setupUser(makeUser({ inventory_json: JSON.stringify({ a: 1 }) }));
+    setupGameState({ lastSenderId: 999 }); // Tier 1 so no penalty interferes
+    // Simulate first message: cnt === 0
+    mockStmts.getRoomMemberMessageCount.get.mockReturnValue({ cnt: 0 });
+    stmts.getRoomMember.get.mockReturnValue(makeUser({ coins: 100 + TIER1_COINS }));
+
+    const result = processMessage(1, 'a');
+
+    expect(result.newLetters).toHaveLength(FIRST_MESSAGE_LETTERS);
+    // Every letter in the grant must appear in the updated inventory
+    for (const letter of result.newLetters) {
+      expect(result.newInventory[letter]).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  test('does NOT grant letters on subsequent messages (cnt > 0)', () => {
+    setupUser(makeUser());
+    setupGameState({ lastSenderId: 999 });
+    // Default mock already returns cnt=1 via beforeEach
+    stmts.getRoomMember.get.mockReturnValue(makeUser({ coins: 100 + TIER1_COINS }));
+
+    const result = processMessage(1, 'a');
+    expect(result.newLetters).toHaveLength(0);
   });
 });
 
@@ -340,7 +376,7 @@ describe('processMessage – transaction', () => {
   test('wraps all writes in a single db.transaction()', () => {
     setupUser(makeUser());
     setupGameState({ lastSenderId: 999 });
-    stmts.getUser.get.mockReturnValue(makeUser({ coins: 110 }));
+    stmts.getRoomMember.get.mockReturnValue(makeUser({ coins: 110 }));
 
     processMessage(1, 'a');
 
@@ -351,11 +387,11 @@ describe('processMessage – transaction', () => {
   test('updateUser and setState are called inside the transaction', () => {
     setupUser(makeUser());
     setupGameState({ lastSenderId: 999 });
-    stmts.getUser.get.mockReturnValue(makeUser({ coins: 110 }));
+    stmts.getRoomMember.get.mockReturnValue(makeUser({ coins: 110 }));
 
     processMessage(1, 'a');
 
-    expect(stmts.updateUser.run).toHaveBeenCalledTimes(1);
+    expect(stmts.updateRoomMember.run).toHaveBeenCalledTimes(1);
     expect(stmts.setState.run).toHaveBeenCalledWith('room:0:last_sender', '1');
     expect(stmts.insertMessage.run).toHaveBeenCalledTimes(1);
   });
@@ -365,28 +401,34 @@ describe('processMessage – transaction', () => {
 // shopRoll
 // ─────────────────────────────────────────────────────────────────────────────
 describe('shopRoll', () => {
-  test('deducts 50 coins and returns letters with a valid rarity tier', () => {
-    const user = makeUser({ coins: 200 });
+  test('deducts rollCost coins and returns letters with a valid rarity tier', () => {
+    // Use empty inventory so scaled cost = base ROLL_COST (no scaling addend)
+    const user = makeUser({ coins: ROLL_COST * 4, inventory_json: JSON.stringify({}) });
     requireUser.mockReturnValue(user);
-    stmts.getUser.get.mockReturnValue({ ...user, coins: 150 });
+    requireRoomMember.mockReturnValue(user);
+    stmts.getRoomMember.get.mockReturnValue({ ...user, coins: ROLL_COST * 4 - ROLL_COST });
 
     const result = shopRoll(1);
 
     expect(result.newLetters.length).toBeGreaterThanOrEqual(1);
-    expect(result.newCoins).toBe(150);
+    expect(result.newCoins).toBe(ROLL_COST * 4 - ROLL_COST);
     const validRarities = ['común', 'bueno', 'raro', 'épico', 'legendario'];
     expect(validRarities).toContain(result.rarity);
   });
 
-  test('throws when the user has fewer than 50 coins', () => {
-    requireUser.mockReturnValue(makeUser({ coins: 30 }));
+  test(`throws when the user has fewer than ROLL_COST (${ROLL_COST}) coins`, () => {
+    // Empty inventory so threshold is exactly ROLL_COST (no scaling addend)
+    const broke = makeUser({ coins: ROLL_COST - 1, inventory_json: JSON.stringify({}) });
+    requireUser.mockReturnValue(broke);
+    requireRoomMember.mockReturnValue(broke);
     expect(() => shopRoll(1)).toThrow(/insuficiente/i);
   });
 
   test('updates inventory with the rolled letters', () => {
     const user = makeUser({ coins: 100, inventory_json: JSON.stringify({ a: 1 }) });
     requireUser.mockReturnValue(user);
-    stmts.getUser.get.mockReturnValue({ ...user, coins: 50 });
+    requireRoomMember.mockReturnValue(user);
+    stmts.getRoomMember.get.mockReturnValue({ ...user, coins: 50 });
 
     const result = shopRoll(1);
     for (const letter of result.newLetters) {
@@ -403,7 +445,8 @@ describe('shopRoll', () => {
     fullInv._symbols = MAX_LETTER_LEVEL;
     const user = makeUser({ coins: 500, inventory_json: JSON.stringify(fullInv) });
     requireUser.mockReturnValue(user);
-    stmts.getUser.get.mockReturnValue({ ...user, coins: 150 });
+    requireRoomMember.mockReturnValue(user);
+    stmts.getRoomMember.get.mockReturnValue({ ...user, coins: 150 });
 
     const result = shopRoll(1);
     for (const letter of result.newLetters) {

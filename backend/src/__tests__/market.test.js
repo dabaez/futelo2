@@ -20,22 +20,25 @@ const mockStmts = {
   getOpenBmListings:     { all: jest.fn() },
   resolveBmListing:      { run: jest.fn() },
   getUserBmListings:     { all: jest.fn() },
-  updateCoins:           { run: jest.fn() },
-  updateInventory:       { run: jest.fn() },
+  // Room-scoped stmts
+  getRoomMember:         { get: jest.fn() },
+  updateRoomCoins:       { run: jest.fn() },
+  updateRoomInventory:   { run: jest.fn() },
 };
 
 jest.mock('../db/database', () => ({
   db: { transaction: jest.fn() },
   stmts: mockStmts,
   requireUser: jest.fn(),
+  requireRoomMember: jest.fn(),
 }));
 
 // Import engine AFTER the mock is set up
 const { listLetter, buyListing, cancelListing, getOpenListings, getUserListings,
         bmListLetter, bmBuyListing, bmCancelListing, getBmOpenListings, getBmUserListings } =
   require('../engine/market');
-const { db, stmts, requireUser } = require('../db/database');
-const { MARKET_MAX_PRICE, MAX_LETTER_LEVEL } = require('../config');
+const { db, stmts, requireUser, requireRoomMember } = require('../db/database');
+const { MARKET_MAX_PRICE, MAX_LETTER_LEVEL, MARKET_COMMISSION } = require('../config');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function makeUser(overrides = {}) {
@@ -58,6 +61,7 @@ function makeListing(overrides = {}) {
     letter:    'a',
     price:     50,
     status:    'open',
+    room_id:   0,
     listed_at: Math.floor(Date.now() / 1000),
     ...overrides,
   };
@@ -80,18 +84,21 @@ describe('listLetter', () => {
 
   test('throws if price is out of range', () => {
     requireUser.mockReturnValue(makeUser());
+    requireRoomMember.mockReturnValue(makeUser());
     expect(() => listLetter(1, 'a', 0)).toThrow(/precio/i);
     expect(() => listLetter(1, 'a', MARKET_MAX_PRICE + 1)).toThrow(/precio/i);
   });
 
   test('throws if seller has no inventory for that letter', () => {
     requireUser.mockReturnValue(makeUser({ inventory_json: JSON.stringify({}) }));
+    requireRoomMember.mockReturnValue(makeUser({ inventory_json: JSON.stringify({}) }));
     expect(() => listLetter(1, 'a', 50)).toThrow(/inventario/i);
   });
 
   test('deducts one letter level and inserts a listing', () => {
     const user = makeUser({ inventory_json: JSON.stringify({ a: 2 }) });
     requireUser.mockReturnValue(user);
+    requireRoomMember.mockReturnValue(user);
     stmts.insertMarketListing.run.mockReturnValue({ lastInsertRowid: 42 });
 
     const result = listLetter(1, 'a', 75);
@@ -100,8 +107,8 @@ describe('listLetter', () => {
     expect(result.letter).toBe('a');
     expect(result.price).toBe(75);
     expect(result.newInventory.a).toBe(1);
-    expect(stmts.updateInventory.run).toHaveBeenCalledWith(
-      JSON.stringify({ a: 1 }), 1
+    expect(stmts.updateRoomInventory.run).toHaveBeenCalledWith(
+      JSON.stringify({ a: 1 }), 0, 1
     );
     expect(stmts.insertMarketListing.run).toHaveBeenCalledWith(1, 'a', 75, 0);
   });
@@ -109,6 +116,7 @@ describe('listLetter', () => {
   test('removes the letter key from inventory when level drops to 0', () => {
     const user = makeUser({ inventory_json: JSON.stringify({ a: 1 }) });
     requireUser.mockReturnValue(user);
+    requireRoomMember.mockReturnValue(user);
     stmts.insertMarketListing.run.mockReturnValue({ lastInsertRowid: 7 });
 
     const result = listLetter(1, 'a', 30);
@@ -119,6 +127,7 @@ describe('listLetter', () => {
   test('works for the _numbers group key', () => {
     const user = makeUser({ inventory_json: JSON.stringify({ _numbers: 3 }) });
     requireUser.mockReturnValue(user);
+    requireRoomMember.mockReturnValue(user);
     stmts.insertMarketListing.run.mockReturnValue({ lastInsertRowid: 5 });
 
     const result = listLetter(1, '_numbers', 20);
@@ -156,6 +165,7 @@ describe('buyListing', () => {
   test('throws if buyer has insufficient coins', () => {
     const buyer = makeUser({ id: 99, coins: 10 });
     requireUser.mockReturnValue(buyer);
+    requireRoomMember.mockReturnValue(buyer);
     stmts.getMarketListing.get.mockReturnValue(makeListing({ seller_id: 10, price: 50 }));
 
     expect(() => buyListing(99, 1)).toThrow(/insuficiente/i);
@@ -164,22 +174,21 @@ describe('buyListing', () => {
   test('transfers coins and grants letter to buyer on success', () => {
     const listing = makeListing({ id: 1, seller_id: 10, letter: 'b', price: 50 });
     const buyer = makeUser({ id: 99, coins: 200, inventory_json: JSON.stringify({ b: 1 }) });
-    const buyerUpdated = makeUser({ id: 99, coins: 150, inventory_json: JSON.stringify({ b: 2 }) });
+    const buyerUpdated = { ...buyer, coins: 150, inventory_json: JSON.stringify({ b: 2 }) };
 
-    // requireUser called: outer, buyer (coins check), buyerFresh (inv update), buyerUpdated (final)
-    requireUser
-      .mockReturnValueOnce(buyer)         // outer validation
-      .mockReturnValueOnce(buyer)         // coins check inside txn
-      .mockReturnValueOnce(buyer)         // buyerFresh for inventory
-      .mockReturnValueOnce(buyerUpdated); // buyerUpdated for return value
-
+    requireUser.mockReturnValue(buyer);
+    requireRoomMember.mockReturnValue(buyer);
     stmts.getMarketListing.get.mockReturnValue(listing);
+    stmts.getRoomMember.get
+      .mockReturnValueOnce(buyer)        // pre-update inventory read
+      .mockReturnValueOnce(buyerUpdated); // final coins read
 
     const result = buyListing(99, 1);
 
-    // buyer pays full price; seller receives 80% (20% commission burned)
-    expect(stmts.updateCoins.run).toHaveBeenCalledWith(-50, 99);     // deduct from buyer
-    expect(stmts.updateCoins.run).toHaveBeenCalledWith( 40, 10);     // credit 80% to seller
+    // buyer pays full price; seller receives (1 - MARKET_COMMISSION) fraction
+    const sellerCredit = Math.floor(listing.price * (1 - MARKET_COMMISSION));
+    expect(stmts.updateRoomCoins.run).toHaveBeenCalledWith(-listing.price, 0, 99);
+    expect(stmts.updateRoomCoins.run).toHaveBeenCalledWith(sellerCredit,   0, 10);
     expect(result.letter).toBe('b');
     expect(result.price).toBe(50);
     expect(result.sellerId).toBe(10);
@@ -193,12 +202,12 @@ describe('buyListing', () => {
     const buyer = makeUser({ id: 99, coins: 200, inventory_json: JSON.stringify(inv) });
     const buyerUpdated = makeUser({ id: 99, coins: 190, inventory_json: JSON.stringify(inv) });
 
-    requireUser
-      .mockReturnValueOnce(buyer)
-      .mockReturnValueOnce(buyer)
+    requireUser.mockReturnValue(buyer);
+    requireRoomMember.mockReturnValue(buyer);
+    stmts.getMarketListing.get.mockReturnValue(listing);
+    stmts.getRoomMember.get
       .mockReturnValueOnce(buyer)
       .mockReturnValueOnce(buyerUpdated);
-    stmts.getMarketListing.get.mockReturnValue(listing);
 
     const result = buyListing(99, 1);
 
@@ -235,10 +244,8 @@ describe('cancelListing', () => {
     const listing = makeListing({ seller_id: 10, letter: 'a', status: 'open' });
     const seller = makeUser({ id: 10, inventory_json: JSON.stringify({ a: 1 }) });
 
-    requireUser
-      .mockReturnValueOnce(seller) // outer validation
-      .mockReturnValueOnce(seller); // inside transaction
-
+    requireUser.mockReturnValue(seller);
+    requireRoomMember.mockReturnValue(seller);
     stmts.getMarketListing.get.mockReturnValue(listing);
 
     const result = cancelListing(10, 1);
@@ -281,6 +288,7 @@ describe('Black market (bmListLetter)', () => {
   test('uses BM stmts, not regular market stmts', () => {
     const user = makeUser({ inventory_json: JSON.stringify({ a: 2 }) });
     requireUser.mockReturnValue(user);
+    requireRoomMember.mockReturnValue(user);
     stmts.insertBmListing.run.mockReturnValue({ lastInsertRowid: 99 });
 
     const result = bmListLetter(1, 'a', 40);
@@ -321,9 +329,8 @@ describe('Black market (bmCancelListing)', () => {
     const listing = makeListing({ seller_id: 10, letter: 'b', status: 'open' });
     const seller = makeUser({ id: 10, inventory_json: JSON.stringify({ b: 1 }) });
 
-    requireUser
-      .mockReturnValueOnce(seller)
-      .mockReturnValueOnce(seller);
+    requireUser.mockReturnValue(seller);
+    requireRoomMember.mockReturnValue(seller);
     stmts.getBmListing.get.mockReturnValue(listing);
 
     const result = bmCancelListing(10, 1);
@@ -335,5 +342,52 @@ describe('Black market (bmCancelListing)', () => {
     );
     // Regular resolve must NOT have been called
     expect(stmts.resolveMarketListing.run).not.toHaveBeenCalled();
+  });
+});
+
+describe('Black market (bmBuyListing)', () => {
+  test('throws if BM listing not found', () => {
+    requireUser.mockReturnValue(makeUser({ id: 99 }));
+    stmts.getBmListing.get.mockReturnValue(null);
+
+    expect(() => bmBuyListing(99, 1)).toThrow(/no encontrado/i);
+  });
+
+  test('throws if BM listing is not open', () => {
+    requireUser.mockReturnValue(makeUser({ id: 99 }));
+    stmts.getBmListing.get.mockReturnValue(makeListing({ status: 'sold' }));
+
+    expect(() => bmBuyListing(99, 1)).toThrow(/disponible/i);
+  });
+
+  test('throws if buyer is the seller', () => {
+    requireUser.mockReturnValue(makeUser({ id: 10 }));
+    stmts.getBmListing.get.mockReturnValue(makeListing({ seller_id: 10 }));
+
+    expect(() => bmBuyListing(10, 1)).toThrow(/propio/i);
+  });
+
+  test('transfers full price to seller (0% commission) and grants letter', () => {
+    const listing = makeListing({ id: 1, seller_id: 10, letter: 'd', price: 50 });
+    const buyer       = makeUser({ id: 99, coins: 200, inventory_json: JSON.stringify({ d: 1 }) });
+    const buyerUpdated = { ...buyer, coins: 150, inventory_json: JSON.stringify({ d: 2 }) };
+
+    requireUser.mockReturnValue(buyer);
+    requireRoomMember.mockReturnValue(buyer);
+    stmts.getBmListing.get.mockReturnValue(listing);
+    stmts.getRoomMember.get
+      .mockReturnValueOnce(buyer)          // inventory read inside txn
+      .mockReturnValueOnce(buyerUpdated);  // fresh coins read
+
+    const result = bmBuyListing(99, 1);
+
+    // BM has 0% commission – seller receives the full price
+    expect(stmts.updateRoomCoins.run).toHaveBeenCalledWith(-50, 0, 99);  // deduct from buyer
+    expect(stmts.updateRoomCoins.run).toHaveBeenCalledWith( 50, 0, 10);  // full 100% to seller
+    expect(result.letter).toBe('d');
+    expect(result.newInventory.d).toBe(2);
+    // Regular stmts must NOT have been involved
+    expect(stmts.resolveMarketListing.run).not.toHaveBeenCalled();
+    expect(stmts.resolveBmListing.run).toHaveBeenCalledTimes(1);
   });
 });

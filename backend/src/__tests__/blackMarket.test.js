@@ -82,8 +82,9 @@ describe('getCurrentHeat', () => {
     stmts.getState.get
       .mockReturnValueOnce({ value: '60' })
       .mockReturnValueOnce({ value: String(ts) });
-    // Expected: 60 - 3 * 5 = 45
-    expect(getCurrentHeat()).toBeCloseTo(45, 0);
+    // Expected: 60 - BM_HEAT_DECAY_PER_MIN * minutesAgo
+    const expected = 60 - config.BM_HEAT_DECAY_PER_MIN * minutesAgo;
+    expect(getCurrentHeat()).toBeCloseTo(expected, 0);
   });
 
   test('clamps decayed heat to 0', () => {
@@ -151,9 +152,9 @@ describe('catchProbability', () => {
     );
   });
 
-  test('at heat=50 is midpoint between min and max', () => {
+  test(`at heat=${config.BM_HEAT_MAX / 2} is midpoint between min and max`, () => {
     const expected = config.BM_BASE_CATCH_PROB + config.BM_HEAT_CATCH_SCALE * 0.5;
-    expect(catchProbability(50)).toBeCloseTo(expected);
+    expect(catchProbability(config.BM_HEAT_MAX / 2)).toBeCloseTo(expected);
   });
 });
 
