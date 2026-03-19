@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 /**
  * ShopModal
@@ -108,6 +108,12 @@ export default function ShopModal({
   const [mineError, setMineError]     = useState(null);
   const [swingState, setSwingState]   = useState('idle'); // 'idle'|'swinging'|'miss'|'found'
   const [rockShaking, setRockShaking] = useState(false);
+  const [tapCount, setTapCount]       = useState(0);
+  const foundTimerRef                 = useRef(null);
+
+  const MISS_MESSAGES = [
+    '💨', '🪨', '💥', '⚡', '🔨', '💢', '🌑', '⛏️', '🫨', '😤',
+  ];
 
   // ── Prompt tab state ─────────────────────────────────────────────────────
   const [firingPrompt, setFiringPrompt] = useState(false);
@@ -193,6 +199,7 @@ export default function ShopModal({
       setMineError(null);
       setSwingResult(null);
       setSwingState('idle');
+      setTapCount(0);
     }
   }, [isOpen]);
 
@@ -657,11 +664,11 @@ export default function ShopModal({
                 <>
                   <div className="text-center text-5xl py-4">🪨</div>
                   <p className="text-sm text-tg-hint text-center">
-                    Las minas de letras te esperan. Compra un pico para empezar a excavar.
+                    Golpea la roca rápido. Cada toque tiene un 1% de chance de revelar una letra.
                   </p>
                   <div className="bg-tg-bg-sec rounded-xl p-3 text-xs text-tg-hint space-y-1">
                     <p>⛏️ Golpes por pico: {cfg.PICKAXE_HITS}</p>
-                    <p>🎲 Probabilidad de hallar letra: {Math.round(cfg.MINE_HIT_CHANCE * 100)}%</p>
+                    <p>💎 1% de probabilidad por toque</p>
                   </div>
                   {mineError && (
                     <p className="text-xs text-red-500 text-center">{mineError}</p>
@@ -711,6 +718,7 @@ export default function ShopModal({
                         setSwinging(true);
                         setRockShaking(true);
                         setMineError(null);
+                        let foundLetter = false;
                         try {
                           const r = await fetch('/api/mine/swing', {
                             method: 'POST',
@@ -719,11 +727,19 @@ export default function ShopModal({
                           const data = await safeJson(r);
                           if (!r.ok) throw new Error(data?.error || 'Error al excavar.');
                           setHitsLeft(data.hitsLeft);
+                          setTapCount(n => n + 1);
                           if (data.found) {
+                            foundLetter = true;
                             setSwingResult({ letter: data.letter });
                             setSwingState('found');
                             onPurchase?.({ newInventory: data.newInventory });
-                            window.Telegram?.WebApp?.HapticFeedback?.impactOccurred('medium');
+                            window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred('success');
+                            // Hold the found display for 2.5 s before allowing next tap
+                            clearTimeout(foundTimerRef.current);
+                            foundTimerRef.current = setTimeout(() => {
+                              setSwingState('idle');
+                              setSwinging(false);
+                            }, 2500);
                           } else {
                             setSwingResult(null);
                             setSwingState('miss');
@@ -732,7 +748,7 @@ export default function ShopModal({
                           setMineError(e.message);
                           setSwingState('idle');
                         } finally {
-                          setSwinging(false);
+                          if (!foundLetter) setSwinging(false);
                         }
                       }}
                       onAnimationEnd={() => setRockShaking(false)}
@@ -741,16 +757,16 @@ export default function ShopModal({
                     </div>
 
                     {/* Status messages */}
-                    <div className="min-h-[4rem] flex flex-col items-center justify-center gap-2">
+                    <div className="min-h-[5rem] flex flex-col items-center justify-center gap-2">
                       {swingState === 'miss' && (
-                        <p className="text-sm text-tg-hint">💨 Nada esta vez…</p>
+                        <p className="text-3xl">{MISS_MESSAGES[tapCount % MISS_MESSAGES.length]}</p>
                       )}
                       {swingState === 'found' && swingResult && (
                         <>
-                          <div className="bg-tg-button/20 border border-tg-button/40 rounded-xl px-6 py-2 text-center">
-                            <span className="text-4xl font-bold text-tg-button uppercase">{swingResult.letter}</span>
+                          <p className="text-xs font-semibold text-yellow-500 tracking-widest uppercase">✨ ¡Letra encontrada!</p>
+                          <div className="bg-yellow-400/20 border border-yellow-400/50 rounded-xl px-6 py-2 text-center">
+                            <span className="text-4xl font-bold text-yellow-400 uppercase">{swingResult.letter}</span>
                           </div>
-                          <p className="text-xs text-tg-hint">¡Encontraste una letra!</p>
                         </>
                       )}
                     </div>
