@@ -39,7 +39,7 @@ futelo/
 │   │   │   ├── market.js          P2P marketplace engine (factory pattern; powers BOTH markets)
 │   │   │   ├── promptEngine.js    Community prompt lifecycle
 │   │   │   ├── lottery.js         Letter-gambling round engine
-│   │   │   ├── blackMarket.js     Black market heat / catch mechanic
+│   │   │   ├── blackMarketHeat.js  Black market heat / catch mechanic
 │   │   │   └── mining.js          Pickaxe / letter-mine engine
 │   │   └── bot/
 │   │       ├── bot.js             grammY bot (/start registration + per-room /gatekeeper toggle)
@@ -331,7 +331,7 @@ Exported functions:
 All buy/list/cancel functions throw a user-facing `Error` on validation failure.
 All write operations are wrapped in `db.transaction()` for atomicity.
 
-### Black Market Engine (`backend/src/engine/blackMarket.js`)
+### Black Market Engine (`backend/src/engine/blackMarketHeat.js`)
 
 Manages the heat/catch mechanic for the secret black market.
 
@@ -740,23 +740,26 @@ Chat IDs for different tabs.
 
 - Config: `backend/jest.config.js` (`testEnvironment: 'node'`, `maxWorkers: 1`)
 - Run: `cd backend && npm test`
-- **150 tests across 6 suites** (all passing)
+- **208 tests across 8 suites** (all passing)
 
 | File | Tests | What it covers |
 |---|---|---|
 | `src/__tests__/auth.test.js` | 18 | `validateInitData` HMAC, `validateInitDataDev` dev tokens, chatId return values |
-| `src/__tests__/engine.test.js` | 30 | `letterRequirements` (incl. `_numbers`/`_symbols`), all 3 tiers, coin floor, letter level cap, `shopRoll` (lootbox rarity), ñ support, transaction shape |
-| `src/__tests__/market.test.js` | 23 | `listLetter`, `buyListing`, `cancelListing`, `getOpenListings`, `getUserListings`, coin/letter cap invariants; BM factory isolation (`bmListLetter`, `bmCancelListing`, `getBmOpenListings`, `getBmUserListings`) |
+| `src/__tests__/engine.test.js` | 32 | `letterRequirements` (incl. `_numbers`/`_symbols`), all 3 tiers, first-message bonus, coin floor, letter level cap, `shopRoll` (lootbox rarity), ñ support, transaction shape |
+| `src/__tests__/market.test.js` | 27 | `listLetter`, `buyListing`, `cancelListing`, `getOpenListings`, `getUserListings`, coin/letter cap invariants; BM factory isolation (`bmListLetter`, `bmBuyListing`, `bmCancelListing`, `getBmOpenListings`, `getBmUserListings`) |
 | `src/__tests__/blackMarket.test.js` | 16 | Heat decay, `addHeat`, `catchProbability`, `runCatchCheck`, listing expiry |
 | `src/__tests__/mining.test.js` | 18 | `buyPickaxe`, `swing`, hit/miss probability, coin deduction, inventory cap |
-| `src/__tests__/api.test.js` | 45 | All REST endpoints incl. P2P market + full BM endpoint flow + mining, end-to-end with temp SQLite DB |
+| `src/__tests__/prompt.test.js` | 21 | `buyPrompt`, `getActivePrompt`, `submitReply` (all error paths + happy path), `castVote`, `closePrompt` (winner/runner-up distribution, tie-breaking, no-replies case) |
+| `src/__tests__/lottery.test.js` | 14 | `startLottery`, `placeBet` (invalid letter, no inventory, active-round guard), `closeLottery` (carry-over, winner coins+letters, `MAX_LETTER_LEVEL` cap), `getActiveLotteryRound` |
+| `src/__tests__/api.test.js` | 62 | All REST endpoints incl. P2P market + full BM flow + mining + lottery + prompt, end-to-end with temp SQLite DB |
 
 **Key patterns:**
 - `FUTELO_DATA_DIR` env override points the DB to a temp directory per test run.
 - `server.js` is guarded with `require.main === module` so supertest can import it without binding a port.
 - `jest.resetAllMocks()` in `beforeEach` (not `clearAllMocks`) to wipe `mockReturnValueOnce` queues. Also re-set `db.transaction.mockImplementation(fn => () => fn())` at the top of each `beforeEach` in `market.test.js`.
 - API tests set `process.env.BOT_TOKEN = ''` before `jest.resetModules()` to prevent grammY from starting.
-- User token constants: `ALICE='dev:1001:…'`, `BOB='dev:1002:…'`, `DAVE='dev:1004:…'` (market buyer), `EVE='dev:1005:…'` (market seller), `FRANK='dev:1006:…'` (BM tests only), `GINA='dev:1007:…'` / `HANK='dev:1008:…'` (mining tests, defined inline). Use fresh users for new suites to avoid state conflicts with earlier tests.
+- User token constants: `ALICE='dev:1001:…'`, `BOB='dev:1002:…'`, `DAVE='dev:1004:…'` (market buyer), `EVE='dev:1005:…'` (market seller), `FRANK='dev:1006:…'` (BM tests only), `GINA='dev:1007:…'` / `HANK='dev:1008:…'` (mining tests, defined inline), `IAN='dev:1009:…'` / `JANE='dev:1010:…'` (lottery tests), `KATE='dev:1011:…'` / `LEON='dev:1012:…'` (prompt tests). Use fresh users for new suites to avoid state conflicts with earlier tests.
+- Dev tokens without an explicit Chat ID default to `chatId = -1001`. When asserting on a resource created by an authenticated POST (lottery round, prompt, market listing), always pass `?roomId=-1001` to the corresponding GET endpoint — otherwise the server queries room `0` and returns null.
 
 ### Frontend — Vitest + Testing Library
 

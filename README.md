@@ -166,6 +166,19 @@ Las alertas por usuario (p.ej. "tu letra se vendió") se **persisten en la DB**.
 ## Tests
 
 ```bash
-cd backend && npm test   # Jest + supertest  (150 tests, 6 suites)
+cd backend && npm test   # Jest + supertest  (208 tests, 8 suites)
 cd frontend && npm test  # Vitest + Testing Library  (35 tests, 2 suites)
 ```
+
+### Backend test suites
+
+| Suite | Tests | What it covers |
+|-------|-------|---------------|
+| `auth.test.js` | 18 | Telegram HMAC + dev-token validation |
+| `engine.test.js` | 32 | `letterRequirements`, all tiers, first-message bonus, coin floor, `shopRoll` |
+| `market.test.js` | 27 | Regular and black-market list/buy/cancel, commission, `bmBuyListing` |
+| `blackMarket.test.js` | 16 | Heat decay, `catchProbability`, `runCatchCheck`, expiry |
+| `mining.test.js` | 18 | `buyPickaxe`, `swing`, hit/miss probability, inventory cap |
+| `prompt.test.js` | 21 | `buyPrompt`, `submitReply`, `castVote`, `closePrompt` with all edge cases |
+| `lottery.test.js` | 14 | `startLottery`, `placeBet`, `closeLottery`, `getActiveLottery` |
+| `api.test.js` | 62 | All REST endpoints end-to-end with a real SQLite DB |
