@@ -35,7 +35,7 @@ const http       = require('http');
 const { Server } = require('socket.io');
 const cors       = require('cors');
 
-const { db, upsertUser, requireUser, upsertRoom, stmts } = require('./db/database');
+const { db, upsertUser, requireUser, upsertRoom, upsertRoomMember, requireRoomMember, stmts } = require('./db/database');
 const { processMessage, shopRoll } = require('./engine/processMessage');
 const {
   listLetter, buyListing, cancelListing, getOpenListings, getUserListings,
@@ -63,10 +63,10 @@ const BEG_COOLDOWN_SEC = config.BEG_COOLDOWN_SEC;
 // In-memory cooldown map: userId → unix-ms when the cooldown expires
 const begCooldowns = new Map();
 
-const PORT      = Number(process.env.SERVER_PORT) || 3001;
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const BOT_MODE  = process.env.BOT_MODE || 'polling';
-const DEV_MODE  = process.env.DEV_MODE === 'true';
+const PORT             = Number(process.env.SERVER_PORT) || 3001;
+const BOT_TOKEN        = process.env.BOT_TOKEN;
+const BOT_MODE         = process.env.BOT_MODE || 'polling';
+const DEV_MODE         = process.env.DEV_MODE === 'true';
 
 // Lazy-load the bot only when a real token exists (optional in dev mode)
 let bot;
@@ -120,6 +120,7 @@ function authMiddleware(req, res, next) {
     // Auto-upsert the room (group) if a chatId is present
     if (chatId && chatId !== 0) {
       upsertRoom(chatId, chatTitle || '');
+      upsertRoomMember(tgUser.id, chatId);
     }
 
     req.tgUser  = tgUser;
@@ -148,6 +149,7 @@ function socketAuth(socket, next) {
 
     if (chatId && chatId !== 0) {
       upsertRoom(chatId, chatTitle || '');
+      upsertRoomMember(tgUser.id, chatId);
     }
 
     socket.tgUser = tgUser;
@@ -196,22 +198,23 @@ app.get('/api/config', (_req, res) => {
 
 // ── REST: /api/auth ────────────────────────────────────────────────────────
 app.post('/api/auth', authMiddleware, (req, res) => {
-  const user = requireUser(req.tgUser.id);
+  const user   = requireUser(req.tgUser.id);
+  const rm     = requireRoomMember(req.tgUser.id, req.chatId);
   const nowSec = Math.floor(Date.now() / 1000);
-  const locks  = stmts.getLocks.all(user.id, nowSec);
+  const locks  = stmts.getLocks.all(req.chatId, user.id, nowSec);
 
   res.json({
     chatId: req.chatId,
     user: {
-      id:          user.id,
-      username:    user.username,
-      first_name:  user.first_name,
-      photo_url:   user.photo_url,
-      coins:       user.coins,
-      inventory:   JSON.parse(user.inventory_json || '{}'),
-      streak:      user.streak_count,
+      id:           user.id,
+      username:     user.username,
+      first_name:   user.first_name,
+      photo_url:    user.photo_url,
+      coins:        rm.coins,
+      inventory:    JSON.parse(rm.inventory_json || '{}'),
+      streak:       user.streak_count,
       lockedLetters: locks.map((l) => l.letter),
-      pickaxe_hits: user.pickaxe_hits,
+      pickaxe_hits: rm.pickaxe_hits,
     },
   });
 });
@@ -219,19 +222,20 @@ app.post('/api/auth', authMiddleware, (req, res) => {
 // ── REST: /api/me ──────────────────────────────────────────────────────────
 app.get('/api/me', authMiddleware, (req, res) => {
   const user   = requireUser(req.tgUser.id);
+  const rm     = requireRoomMember(req.tgUser.id, req.chatId);
   const nowSec = Math.floor(Date.now() / 1000);
-  const locks  = stmts.getLocks.all(user.id, nowSec);
+  const locks  = stmts.getLocks.all(req.chatId, user.id, nowSec);
 
   res.json({
     id:           user.id,
     username:     user.username,
     first_name:   user.first_name,
     photo_url:    user.photo_url,
-    coins:        user.coins,
-    inventory:    JSON.parse(user.inventory_json || '{}'),
+    coins:        rm.coins,
+    inventory:    JSON.parse(rm.inventory_json || '{}'),
     streak:       user.streak_count,
     lockedLetters: locks.map((l) => l.letter),
-    pickaxe_hits: user.pickaxe_hits,
+    pickaxe_hits: rm.pickaxe_hits,
   });
 });
 
@@ -277,7 +281,7 @@ app.post('/api/message', authMiddleware, (req, res) => {
 // ── REST: /api/shop/roll ───────────────────────────────────────────────────
 app.post('/api/shop/roll', authMiddleware, (req, res) => {
   try {
-    const result = shopRoll(req.tgUser.id);
+    const result = shopRoll(req.tgUser.id, req.chatId);
     // Notify the specific user's sockets of their updated state
     io.to(`user:${req.tgUser.id}`).emit('user_update', {
       newCoins:     result.newCoins,
@@ -348,7 +352,7 @@ app.post('/api/market/buy/:id', authMiddleware, (req, res) => {
     });
     // Update seller's coins
     io.to(`user:${result.sellerId}`).emit('user_update', {
-      newCoins: requireUser(result.sellerId).coins,
+      newCoins: stmts.getRoomMember.get(roomId, result.sellerId)?.coins,
     });
     // Tell all clients in the room this listing is gone
     io.to(`room:${roomId}`).emit('market_listing_sold', { listingId: result.listingId });
@@ -432,7 +436,7 @@ app.post('/api/bm/buy/:id', authMiddleware, (req, res) => {
       newInventory: result.newInventory,
     });
     io.to(`user:${result.sellerId}`).emit('user_update', {
-      newCoins: requireUser(result.sellerId).coins,
+      newCoins: stmts.getRoomMember.get(roomId, result.sellerId)?.coins,
     });
     io.to(`room:${roomId}`).emit('bm_listing_sold', { listingId: result.listingId });
     // Notify the BM seller — queued so offline sellers see it on reconnect
@@ -537,7 +541,7 @@ app.post('/api/lottery/bet', authMiddleware, (req, res) => {
 // Buy a pickaxe: deduct PICKAXE_COST coins, add PICKAXE_HITS swings.
 app.post('/api/mine/buy', authMiddleware, (req, res) => {
   try {
-    const result = buyPickaxe(req.tgUser.id);
+    const result = buyPickaxe(req.tgUser.id, req.chatId);
     io.to(`user:${req.tgUser.id}`).emit('user_update', {
       newCoins:    result.newCoins,
       pickaxeHits: result.pickaxeHits,
@@ -551,7 +555,7 @@ app.post('/api/mine/buy', authMiddleware, (req, res) => {
 // Swing once: costs 1 hit, MINE_HIT_CHANCE to find a random letter.
 app.post('/api/mine/swing', authMiddleware, (req, res) => {
   try {
-    const result = mineSwing(req.tgUser.id);
+    const result = mineSwing(req.tgUser.id, req.chatId);
     const update = { pickaxeHits: result.hitsLeft };
     if (result.found) update.newInventory = result.newInventory;
     io.to(`user:${req.tgUser.id}`).emit('user_update', update);
@@ -562,11 +566,9 @@ app.post('/api/mine/swing', authMiddleware, (req, res) => {
 });
 
 // ── POST /api/notifications/enable ─────────────────────────────────────────
-// Called by the frontend after the user grants write access via
-// Telegram.WebApp.requestWriteAccess(). Records consent so the bot can send
-// push notifications when the user is offline.
+// Kept as a stub for backwards compatibility. Notifications now go to the
+// configured NOTIFY_CHANNEL_ID channel instead of individual DMs.
 app.post('/api/notifications/enable', authMiddleware, (req, res) => {
-  stmts.setUserWriteAccess.run(req.tgUser.id);
   res.json({ ok: true });
 });
 
@@ -620,17 +622,10 @@ io.on('connection', (socket) => {
         io.to(`room:${roomId}`).emit('bm_heat_update', { heat: newHeat, catchProb: catchProbability(newHeat) });
       }
 
-      // ── Telegram push notifications to offline opt-in members ─────────────────────
+      // ── Thread push notification ─────────────────────────────────────────────────
       const senderName = user.first_name || user.username || 'Alguien';
       const preview    = text.length > 60 ? `${text.slice(0, 57)}…` : text;
-      const pushText   = `💬 ${senderName}: ${preview}`;
-      const members = stmts.getRoomMembersWithWriteAccess.all(roomId, userId);
-      for (const { id: memberId } of members) {
-        const isOnline = (io.sockets.adapter.rooms.get(`user:${memberId}`)?.size ?? 0) > 0;
-        if (!isOnline) {
-          sendTelegramNotification(memberId, pushText);
-        }
-      }
+      postToRoomThread(roomId, `💬 ${senderName}: ${preview}`);
     } catch (err) {
       socket.emit('rejected_message', { reason: err.message });
     }
@@ -684,14 +679,14 @@ io.on('connection', (socket) => {
   socket.on('give_coins', ({ targetUserId }) => {
     if (targetUserId === userId) return;
     try {
-      const giver = requireUser(userId);
-      if (giver.coins < BEG_GIFT_AMOUNT) return;
+      const giver = stmts.getRoomMember.get(roomId, userId);
+      if (!giver || giver.coins < BEG_GIFT_AMOUNT) return;
       db.transaction(() => {
-        stmts.updateCoins.run(-BEG_GIFT_AMOUNT, userId);
-        stmts.updateCoins.run(BEG_GIFT_AMOUNT, targetUserId);
+        stmts.updateRoomCoins.run(-BEG_GIFT_AMOUNT, roomId, userId);
+        stmts.updateRoomCoins.run(BEG_GIFT_AMOUNT, roomId, targetUserId);
       })();
-      const freshGiver  = requireUser(userId);
-      const freshTarget = requireUser(targetUserId);
+      const freshGiver  = stmts.getRoomMember.get(roomId, userId);
+      const freshTarget = stmts.getRoomMember.get(roomId, targetUserId);
       socket.emit('user_update', {
         newCoins:  freshGiver.coins,
         coinDelta: -BEG_GIFT_AMOUNT,
@@ -749,19 +744,24 @@ function notifyUser(userId, text, type = 'info') {
 }
 
 /**
- * Send a Telegram Bot DM to a user who has granted write access.
- * Silently ignored if the bot is not available or the user has never DM'd it.
+ * Post a message to the room's configured Telegram thread.
+ * Reads notify_thread_id from the rooms table:
+ *   NULL  → not configured, do nothing
+ *   0     → main chat (no message_thread_id)
+ *   N > 0 → forum topic thread
  *
- * @param {number} userId
+ * @param {number} roomId
  * @param {string} text
  */
-async function sendTelegramNotification(userId, text) {
+async function postToRoomThread(roomId, text) {
   if (!bot) return;
+  const room = stmts.getRoomById.get(roomId);
+  if (!room || room.notify_thread_id === null || room.notify_thread_id === undefined) return;
+  const opts = room.notify_thread_id > 0 ? { message_thread_id: room.notify_thread_id } : {};
   try {
-    await bot.api.sendMessage(userId, text);
+    await bot.api.sendMessage(roomId, text, opts);
   } catch (err) {
-    // User may not have started a DM with the bot — silently ignore
-    console.warn(`[TG Push] Could not notify user ${userId}: ${err.message}`);
+    console.warn(`[Thread Push] Room ${roomId}: ${err.message}`);
   }
 }
 
@@ -827,32 +827,32 @@ if (require.main === module) {
       const { caught, expired, heat: newHeat } = runCatchCheck();
 
       for (const c of caught) {
+        const cRoomId = c.roomId ?? 0;
         // Tell the seller they were caught
         io.to(`user:${c.sellerId}`).emit('bm_caught', {
           letter: c.letter, fine: c.fine, listingId: c.listingId,
         });
         // Push updated balance
-        const freshSeller = requireUser(c.sellerId);
+        const freshSeller = stmts.getRoomMember.get(cRoomId, c.sellerId);
         io.to(`user:${c.sellerId}`).emit('user_update', {
-          newCoins:  freshSeller.coins,
+          newCoins:  freshSeller?.coins,
           coinDelta: -c.fine,
         });
         // Remove from the room's public listings feed
-        const cRoomId = c.roomId ?? 0;
         io.to(`room:${cRoomId}`).emit('bm_listing_cancelled', { listingId: c.listingId });
         console.log(`[BM] User ${c.sellerId} caught selling "${c.letter}" in room ${cRoomId}. Fine: ${c.fine}. Heat: ${newHeat}`);
       }
 
       for (const e of expired) {
+        const eRoomId = e.roomId ?? 0;
         // Letter returned — tell the seller
         io.to(`user:${e.sellerId}`).emit('bm_listing_expired', {
           letter: e.letter, listingId: e.listingId,
         });
-        const freshSeller = requireUser(e.sellerId);
+        const freshSeller = stmts.getRoomMember.get(eRoomId, e.sellerId);
         io.to(`user:${e.sellerId}`).emit('user_update', {
-          newInventory: JSON.parse(freshSeller.inventory_json),
+          newInventory: freshSeller ? JSON.parse(freshSeller.inventory_json) : undefined,
         });
-        const eRoomId = e.roomId ?? 0;
         io.to(`room:${eRoomId}`).emit('bm_listing_cancelled', { listingId: e.listingId });
       }
 
@@ -873,9 +873,9 @@ if (require.main === module) {
         const lResult = closeLottery(activeLottery.id);
         if (lResult) {
           lResult.winners.forEach((w) => {
-            const fresh = requireUser(w.userId);
+            const fresh = stmts.getRoomMember.get(rid, w.userId);
             io.to(`user:${w.userId}`).emit('user_update', {
-              newCoins:     fresh.coins,
+              newCoins:     fresh?.coins,
               coinDelta:    w.coinsEarned,
               newInventory: w.newInventory,
               newLetters:   [],

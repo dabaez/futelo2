@@ -18,9 +18,9 @@ require('dotenv').config({ path: require('path').join(__dirname, '../../.env') }
 const { Bot, InlineKeyboard } = require('grammy');
 const { upsertUser, upsertRoom, stmts, setRoomGatekeeper } = require('../db/database');
 
-const BOT_TOKEN          = process.env.BOT_TOKEN;
-const APP_URL            = process.env.MINI_APP_URL;         // fallback plain URL
-const DIRECT_LINK        = process.env.MINI_APP_DIRECT_LINK; // t.me/botname/appname
+const BOT_TOKEN  = process.env.BOT_TOKEN;
+const APP_URL    = process.env.MINI_APP_URL;
+const DIRECT_LINK = process.env.MINI_APP_DIRECT_LINK;
 
 if (!BOT_TOKEN) throw new Error('BOT_TOKEN missing from .env');
 
@@ -159,19 +159,120 @@ bot.command('gatekeeper', async (ctx) => {
   );
 });
 
-// ── Gatekeeper message handler ─────────────────────────────────────────────
-// Deletes non-bot messages only in groups where gatekeeper is enabled.
+// ── /setthread ─────────────────────────────────────────────────────────────
+// Run this command from inside the thread (or main chat) you want Futelo to
+// mirror messages into. Pass "off" to disable mirroring.
+// Only group admins can use it.
+bot.command('setthread', async (ctx) => {
+  const chat = ctx.chat;
+  if (!chat || (chat.type !== 'group' && chat.type !== 'supergroup')) {
+    await ctx.reply('Este comando solo funciona en grupos.');
+    return;
+  }
+
+  const member  = await ctx.getChatMember(ctx.from.id);
+  const isAdmin = member.status === 'administrator' || member.status === 'creator';
+  if (!isAdmin) {
+    await ctx.reply('\u26d4 Solo los administradores pueden configurar el hilo de notificaciones.');
+    return;
+  }
+
+  const arg = ctx.match?.trim().toLowerCase();
+  if (arg === 'off') {
+    stmts.setNotifyThread.run(null, chat.id);
+    await ctx.reply(
+      '\u2705 *Espejo de mensajes desactivado.*\n' +
+      'Futelo ya no publicar\u00e1 mensajes en ning\u00fan hilo de este grupo.',
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  // Use the thread id of the current message (undefined in main chat → 0)
+  const threadId = ctx.message?.message_thread_id ?? 0;
+  stmts.setNotifyThread.run(threadId, chat.id);
+
+  const where = threadId > 0 ? `hilo #${threadId}` : 'chat principal';
+  await ctx.reply(
+    `\u2705 *Espejo de mensajes activado.*\n` +
+    `Futelo publicar\u00e1 un resumen de cada mensaje en el ${where}.\n\n` +
+    `Para activar la eliminaci\u00f3n autom\u00e1tica de respuestas de usuarios en ese hilo usa */setthreaddelete*.`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
+// ── /setthreaddelete ────────────────────────────────────────────────────────
+// Toggles auto-deletion of user replies in the configured mirror thread.
+// When enabled the bot deletes any non-bot message posted to that thread.
+bot.command('setthreaddelete', async (ctx) => {
+  const chat = ctx.chat;
+  if (!chat || (chat.type !== 'group' && chat.type !== 'supergroup')) {
+    await ctx.reply('Este comando solo funciona en grupos.');
+    return;
+  }
+
+  const member  = await ctx.getChatMember(ctx.from.id);
+  const isAdmin = member.status === 'administrator' || member.status === 'creator';
+  if (!isAdmin) {
+    await ctx.reply('\u26d4 Solo los administradores pueden cambiar esta opci\u00f3n.');
+    return;
+  }
+
+  const room       = stmts.getRoomById.get(chat.id);
+  const wasEnabled = room?.notify_thread_delete === 1;
+  const nowEnabled = !wasEnabled;
+
+  if (nowEnabled && (room?.notify_thread_id === null || room?.notify_thread_id === undefined)) {
+    await ctx.reply(
+      '\u26a0\ufe0f Primero configura un hilo con */setthread*.',
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  stmts.setNotifyThreadDelete.run(nowEnabled ? 1 : 0, chat.id);
+  await ctx.reply(
+    nowEnabled
+      ? '\ud83d\uddd1\ufe0f *Borrado autom\u00e1tico activado.* Los mensajes de usuarios en el hilo de notificaciones ser\u00e1n eliminados.'
+      : '\u2705 *Borrado autom\u00e1tico desactivado.*',
+    { parse_mode: 'Markdown' }
+  );
+});
+
+
+// ── Gatekeeper + per-room thread delete message handler ──────────────────
 bot.on('message', async (ctx) => {
   const chat = ctx.chat;
-  if (!chat || (chat.type !== 'group' && chat.type !== 'supergroup')) return;
+  if (!chat) return;
   if (ctx.from?.is_bot) return;
 
+  if (chat.type !== 'group' && chat.type !== 'supergroup') return;
+
   const room = stmts.getRoomById.get(chat.id);
-  if (!room?.gatekeeper) return;
+  if (!room) return;
+
+  const msgThreadId = ctx.message?.message_thread_id ?? null;
+
+  // ── Per-room thread delete: remove user replies in the mirror thread ──
+  if (room.notify_thread_delete === 1 && room.notify_thread_id !== null && room.notify_thread_id !== undefined) {
+    const inConfiguredThread =
+      (room.notify_thread_id === 0 && msgThreadId === null) ||
+      (room.notify_thread_id > 0   && msgThreadId === room.notify_thread_id);
+    if (inConfiguredThread) {
+      try {
+        await ctx.deleteMessage();
+      } catch {
+        // Message may already be gone — silently ignore
+      }
+      return;
+    }
+  }
+
+  // ── Gatekeeper: delete all messages in opted-in groups ────────────────
+  if (!room.gatekeeper) return;
 
   const canDelete = await checkDeletePermission(chat.id);
   if (!canDelete) {
-    // Permission was revoked after enabling — notify once and auto-disable
     canDeleteCache.delete(chat.id);
     setRoomGatekeeper(chat.id, false);
     await ctx.reply(
