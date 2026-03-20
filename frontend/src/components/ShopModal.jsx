@@ -20,41 +20,77 @@ async function safeJson(res) {
 // Full class names are used (no string interpolation) so Tailwind's purge sees them.
 const RARITY_META = {
   'común': {
-    label: 'Común', emoji: '📦',
+    label: 'Común', emoji: '📦', shortLabel: 'Común',
+    stripBg: 'bg-gray-700', stripBorder: 'border-gray-500', stripText: 'text-gray-200',
     textClass:  'text-gray-400',
     bgClass:    'bg-tg-bg-sec',
     chipClass:  'bg-gray-600/40 text-gray-300',
     celebrationEmoji: null, animated: false, pulse: false, legendary: false,
   },
   'bueno': {
-    label: 'Bueno', emoji: '✨',
+    label: 'Bueno', emoji: '✨', shortLabel: 'Bueno',
+    stripBg: 'bg-green-800', stripBorder: 'border-green-500', stripText: 'text-green-100',
     textClass:  'text-green-400',
     bgClass:    'bg-green-900/30 border border-green-600/30',
     chipClass:  'bg-green-800/50 text-green-200',
     celebrationEmoji: '✨  ✨', animated: true, pulse: false, legendary: false,
   },
   'raro': {
-    label: 'Raro', emoji: '⭐',
+    label: 'Raro', emoji: '⭐', shortLabel: 'Raro ⭐',
+    stripBg: 'bg-blue-800', stripBorder: 'border-blue-500', stripText: 'text-blue-100',
     textClass:  'text-blue-400',
     bgClass:    'bg-blue-900/30 border border-blue-500/40',
     chipClass:  'bg-blue-800/50 text-blue-200',
     celebrationEmoji: '⭐  ⭐  ⭐', animated: true, pulse: false, legendary: false,
   },
   'épico': {
-    label: '¡ÉPICO!', emoji: '💫',
+    label: '¡ÉPICO!', emoji: '💫', shortLabel: '💫 Épico',
+    stripBg: 'bg-purple-800', stripBorder: 'border-purple-400', stripText: 'text-purple-100',
     textClass:  'text-purple-300',
     bgClass:    'bg-purple-900/40 border border-purple-500/50',
     chipClass:  'bg-purple-700/60 text-purple-100',
     celebrationEmoji: '💫  🌟  💫', animated: true, pulse: true, legendary: false,
   },
   'legendario': {
-    label: '¡¡LEGENDARIO!!', emoji: '🏆',
+    label: '¡¡LEGENDARIO!!', emoji: '🏆', shortLabel: '🏆 LEGENDARIO',
+    stripBg: 'bg-yellow-700', stripBorder: 'border-yellow-400', stripText: 'text-yellow-100',
     textClass:  'text-yellow-300',
     bgClass:    'bg-yellow-800/30 border-2 border-yellow-400/60',
     chipClass:  'bg-yellow-600/50 text-yellow-100',
     celebrationEmoji: '🎉  🏆  🎊  🌟  🎊  🏆  🎉', animated: true, pulse: true, legendary: true,
   },
 };
+
+// ── Roulette strip helpers ──────────────────────────────────────────────────
+const RARITY_WEIGHTS = [
+  { name: 'común',      weight: 40 },
+  { name: 'bueno',      weight: 35 },
+  { name: 'raro',       weight: 18 },
+  { name: 'épico',      weight: 6  },
+  { name: 'legendario', weight: 1  },
+];
+const ITEM_W      = 96;  // px – width of each roulette box
+const ITEM_GAP    = 8;   // px – gap between boxes
+const ITEM_STRIDE = ITEM_W + ITEM_GAP; // 104 px
+const WINNER_IDX  = 62;  // index in the spin strip where the winner lands
+const STRIP_TOTAL = 70;  // total items in the strip
+
+function randomRarity() {
+  let r = Math.random() * 100;
+  for (const { name, weight } of RARITY_WEIGHTS) {
+    r -= weight;
+    if (r <= 0) return name;
+  }
+  return 'común';
+}
+
+function buildSpinStrip(winnerRarity) {
+  const items = [];
+  for (let i = 0; i < STRIP_TOTAL; i++) {
+    items.push(i === WINNER_IDX ? winnerRarity : randomRarity());
+  }
+  return items;
+}
 
 export default function ShopModal({
   isOpen,
@@ -81,9 +117,19 @@ export default function ShopModal({
   });
 
   // ── Roll tab state ───────────────────────────────────────────────────────
-  const [rolling, setRolling]       = useState(false);
-  const [rollResult, setRollResult] = useState(null);
-  const [rollError, setRollError]   = useState(null);
+  const [rolling, setRolling]           = useState(false);
+  const [rollResult, setRollResult]     = useState(null);   // { letters, rarity } after reveal
+  const [rollError, setRollError]       = useState(null);
+  // Roulette animation
+  const [spinPhase, setSpinPhase]       = useState('idle'); // 'idle'|'spinning'|'cards'
+  const [spinStrip, setSpinStrip]       = useState([]);     // array of rarity names
+  const [pendingResult, setPendingResult] = useState(null); // server response held during spin
+  const [revealedCards, setRevealedCards] = useState([]);   // which card indices are face-up
+  const stripRef                        = useRef(null);
+  const spinRafRef                      = useRef(null);
+  // Stable ref so the RAF callback can call onPurchase without being in its dep array
+  const onPurchaseRef                   = useRef(onPurchase);
+  useEffect(() => { onPurchaseRef.current = onPurchase; }, [onPurchase]);
 
   // ── Market: buy tab state ────────────────────────────────────────────────
   const [openListings, setOpenListings]       = useState([]);
@@ -191,6 +237,10 @@ export default function ShopModal({
     if (!isOpen) {
       setRollResult(null);
       setRollError(null);
+      setSpinPhase('idle');
+      setSpinStrip([]);
+      setPendingResult(null);
+      setRevealedCards([]);
       setBuyError(null);
       setListError(null);
       setSelectedLetter(null);
@@ -200,8 +250,72 @@ export default function ShopModal({
       setSwingResult(null);
       setSwingState('idle');
       setTapCount(0);
+      cancelAnimationFrame(spinRafRef.current);
     }
   }, [isOpen]);
+
+  // ── Roulette spin animation (CSS transform via requestAnimationFrame) ────
+  // Guard: only start once the strip items are in the DOM (spinStrip.length > 0)
+  useEffect(() => {
+    if (spinPhase !== 'spinning' || !stripRef.current || !pendingResult || spinStrip.length === 0) return;
+
+    const strip = stripRef.current;
+    const winnerRarity = pendingResult.rarity;
+
+    // Target: center the winner box exactly under the viewport center pointer.
+    // Measure the actual container width at runtime so it works on any screen size.
+    const viewportCenter = strip.parentElement.offsetWidth / 2;
+    // strip translateX needed so winner's center aligns to viewportCenter:
+    // winner center from strip left = paddingLeft(8) + WINNER_IDX * ITEM_STRIDE + ITEM_W/2
+    const targetX = viewportCenter - (8 + WINNER_IDX * ITEM_STRIDE + ITEM_W / 2);
+
+    // Start 15 items to the right of the landing position for travel distance.
+    const startX = targetX + ITEM_STRIDE * 15;
+    const DURATION = 4200; // ms
+
+    let startTime = null;
+    strip.style.transform = `translateX(${startX}px)`;
+
+    function easeOutQuint(t) {
+      return 1 - Math.pow(1 - t, 5);
+    }
+
+    function frame(ts) {
+      if (!startTime) startTime = ts;
+      const elapsed = ts - startTime;
+      const t = Math.min(elapsed / DURATION, 1);
+      const ease = easeOutQuint(t);
+      const x = startX + (targetX - startX) * ease;
+      strip.style.transform = `translateX(${x}px)`;
+
+      if (t < 1) {
+        spinRafRef.current = requestAnimationFrame(frame);
+      } else {
+        const haptic = window.Telegram?.WebApp?.HapticFeedback;
+        if      (winnerRarity === 'legendario') haptic?.notificationOccurred('success');
+        else if (winnerRarity === 'épico')      haptic?.impactOccurred('heavy');
+        else if (winnerRarity === 'raro')       haptic?.impactOccurred('medium');
+
+        if (pendingResult.allCapped) {
+          // Skip card reveal — go straight to the coin-bonus summary
+          setRollResult({
+            letters:   [],
+            rarity:    winnerRarity,
+            coinBonus: pendingResult.coinBonus,
+            allCapped: true,
+          });
+          setSpinPhase('done');
+          onPurchaseRef.current?.(pendingResult);
+        } else {
+          setSpinPhase('cards');
+          setRevealedCards([]);
+        }
+      }
+    }
+
+    spinRafRef.current = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(spinRafRef.current);
+  }, [spinPhase, pendingResult, spinStrip]);  // spinStrip dep ensures DOM is ready
 
   // Keep hitsLeft in sync when parent pushes a new value (socket user_update)
   useEffect(() => {
@@ -214,10 +328,15 @@ export default function ShopModal({
 
   // ── Roll action ──────────────────────────────────────────────────────────
   const handleRoll = useCallback(async () => {
-    if (rolling || coins < rollCost) return;
+    // Allow re-rolling from 'done' state as well as 'idle'
+    if (rolling || coins < rollCost || (spinPhase !== 'idle' && spinPhase !== 'done')) return;
     setRolling(true);
     setRollResult(null);
     setRollError(null);
+    setRevealedCards([]);
+    setPendingResult(null);
+    setSpinStrip([]);    // clear old strip
+    setSpinPhase('idle'); // reset in case coming from 'done'
     try {
       const r = await fetch('/api/shop/roll', {
         method: 'POST',
@@ -225,19 +344,52 @@ export default function ShopModal({
       });
       const data = await safeJson(r);
       if (!r.ok) throw new Error(data?.error || 'Error en la tienda.');
-      setRollResult({ letters: data.newLetters, rarity: data.rarity });
-      // Haptic feedback scaled to rarity on Telegram
-      const haptic = window.Telegram?.WebApp?.HapticFeedback;
-      if      (data.rarity === 'legendario') haptic?.notificationOccurred('success');
-      else if (data.rarity === 'épico')      haptic?.impactOccurred('heavy');
-      else if (data.rarity === 'raro')       haptic?.impactOccurred('medium');
-      onPurchase?.(data);
+      // Build the strip NOW so React batches it with setSpinPhase('spinning').
+      // The useEffect waits for spinStrip.length > 0, so the DOM will have
+      // the items rendered before the RAF animation touches the ref.
+      const newStrip = buildSpinStrip(data.rarity);
+      setSpinStrip(newStrip);
+      setPendingResult(data);
+      setSpinPhase('spinning');
+      // NOTE: onPurchase is intentionally deferred until the player reveals
+      // all cards, so coins/inventory/toasts don't appear mid-animation.
     } catch (e) {
       setRollError(e.message);
     } finally {
       setRolling(false);
     }
-  }, [rolling, coins, rollCost, initData, onPurchase]);
+  }, [rolling, coins, rollCost, spinPhase, initData]);  // onPurchase removed — called on reveal
+
+  // Called when cards phase: user taps a card to flip it
+  const handleFlipCard = useCallback((idx) => {
+    setRevealedCards((prev) => {
+      if (prev.includes(idx)) return prev;
+      const next = [...prev, idx];
+      // When ALL cards are revealed, wait for the last flip animation (500ms)
+      // to finish before switching to the summary view.
+      if (pendingResult && next.length === pendingResult.newLetters.length) {
+        setTimeout(() => {
+          setRollResult({ letters: pendingResult.newLetters, rarity: pendingResult.rarity });
+          setSpinPhase('done');
+          onPurchase?.(pendingResult);
+        }, 550);
+      }
+      return next;
+    });
+    window.Telegram?.WebApp?.HapticFeedback?.impactOccurred('light');
+  }, [pendingResult, onPurchase]);
+
+  const handleRevealAll = useCallback(() => {
+    if (!pendingResult) return;
+    const allIdx = pendingResult.newLetters.map((_, i) => i);
+    setRevealedCards(allIdx);
+    // Give the batch of flip animations a moment before switching views
+    setTimeout(() => {
+      setRollResult({ letters: pendingResult.newLetters, rarity: pendingResult.rarity });
+      setSpinPhase('done');
+      onPurchase?.(pendingResult);
+    }, 550);
+  }, [pendingResult, onPurchase]);
 
   // ── Buy listing action ───────────────────────────────────────────────────
   const handleBuyListing = useCallback(async (listingId) => {
@@ -337,7 +489,6 @@ export default function ShopModal({
 
   // ── Derived: inventory keys + labels ────────────────────────────────────
   const isBroke  = coins < rollCost && totalLevels === 0;
-  const rollMeta  = rollResult ? (RARITY_META[rollResult.rarity] || RARITY_META['común']) : null;
 
   const inventoryEntries = Object.entries(inventory || {})
     .filter(([, v]) => v > 0)
@@ -412,69 +563,208 @@ export default function ShopModal({
           {/* ── 🎰 Roll tab ───────────────────────────────────────────── */}
           {activeTab === 'roll' && (
             <div className="flex flex-col gap-4">
-              <p className="text-sm text-tg-hint text-center">
-                Abre una caja de letras — ¡la rareza es sorpresa!
-              </p>
 
-              {rollResult && rollMeta && (
-                <div className={`rounded-2xl p-4 text-center transition-all ${
-                  rollMeta.bgClass} ${rollMeta.pulse ? 'animate-pulse' : ''}`}>
-                  {rollMeta.celebrationEmoji && (
-                    <p className={`text-2xl mb-2 ${rollMeta.animated ? 'animate-bounce' : ''}`}>
-                      {rollMeta.celebrationEmoji}
-                    </p>
-                  )}
-                  <p className={`text-2xl font-black tracking-wider mb-3 ${rollMeta.textClass}`}>
-                    {rollMeta.emoji} {rollMeta.label}
+              {/* ── Idle / done state: show CTA ── */}
+              {(spinPhase === 'idle' || spinPhase === 'done') && (
+                <>
+                  <p className="text-sm text-tg-hint text-center">
+                    Abre una caja de letras — ¡la rareza es sorpresa!
                   </p>
-                  <div className="flex flex-wrap justify-center gap-2">
-                    {rollResult.letters.map((l, i) => (
-                      <span
-                        key={i}
-                        className={`font-black text-xl px-3 py-2 rounded-xl ${
-                          rollMeta.chipClass} ${rollMeta.animated ? 'animate-bounce' : ''}`}
-                        style={rollMeta.animated ? { animationDelay: `${i * 100}ms` } : {}}
-                      >
-                        {letterLabel(l)}
-                      </span>
-                    ))}
-                  </div>
-                  {rollMeta.legendary && (
-                    <p className="text-2xl mt-3 animate-bounce">🌟  ✨  🌟  ✨  🌟</p>
+
+                  {/* Result summary (after all cards flipped) */}
+                  {spinPhase === 'done' && rollResult && (() => {
+                    const meta = RARITY_META[rollResult.rarity] || RARITY_META['común'];
+                    return (
+                      <div className={`rounded-2xl p-4 text-center ${meta.bgClass} ${rollResult.allCapped ? '' : meta.pulse ? 'animate-pulse' : ''}`}>
+                        {rollResult.allCapped ? (
+                          // ── All-capped path: show coin bonus ────────────────────
+                          <>
+                            <p className={`text-xl font-black tracking-wider mb-1 ${meta.textClass}`}>
+                              {meta.emoji} {meta.label}
+                            </p>
+                            <p className="text-sm text-tg-hint mb-3">¡Todo al máximo! Tirada sin costo.</p>
+                            <p className="text-4xl font-black text-yellow-400 animate-bounce">+{rollResult.coinBonus} 🪙</p>
+                          </>
+                        ) : (
+                          // ── Normal path: show letters ───────────────────────────
+                          <>
+                            {meta.celebrationEmoji && (
+                              <p className={`text-2xl mb-2 ${meta.animated ? 'animate-bounce' : ''}`}>
+                                {meta.celebrationEmoji}
+                              </p>
+                            )}
+                            <p className={`text-xl font-black tracking-wider mb-3 ${meta.textClass}`}>
+                              {meta.emoji} {meta.label}
+                            </p>
+                            <div className="flex flex-wrap justify-center gap-2">
+                              {rollResult.letters.map((l, i) => (
+                                <span
+                                  key={i}
+                                  className={`font-black text-xl px-3 py-2 rounded-xl ${meta.chipClass} ${meta.animated ? 'animate-bounce' : ''}`}
+                                  style={meta.animated ? { animationDelay: `${i * 100}ms` } : {}}
+                                >
+                                  {letterLabel(l)}
+                                </span>
+                              ))}
+                            </div>
+                            {meta.legendary && (
+                              <p className="text-2xl mt-3 animate-bounce">🌟  ✨  🌟  ✨  🌟</p>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {rollError && (
+                    <p className="text-xs text-red-500 text-center">{rollError}</p>
                   )}
-                </div>
-              )}
 
-              {rollError && (
-                <p className="text-xs text-red-500 text-center">{rollError}</p>
-              )}
-
-              <button
-                onClick={handleRoll}
-                disabled={rolling || coins < rollCost}
-                className="bg-tg-button text-tg-btn-text font-semibold rounded-xl py-3 active:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {rolling ? 'Abriendo…' : `Abrir caja por ${rollCost} 🪙`}
-              </button>
-
-              <p className="text-xs text-tg-hint text-center">
-                Saldo actual: {coins} 🪙
-              </p>
-
-              {isBroke && (
-                <div className="flex flex-col items-center gap-1 pt-2 border-t border-tg-bg-sec">
-                  <p className="text-[11px] text-tg-hint text-center">Sin letras ni monedas suficientes</p>
                   <button
-                    onClick={() => socket?.emit('beg')}
-                    className="bg-amber-500 text-white font-semibold rounded-xl py-2 px-6 active:opacity-80"
+                    onClick={handleRoll}
+                    disabled={rolling || coins < rollCost}
+                    className="bg-tg-button text-tg-btn-text font-semibold rounded-xl py-3 active:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    🙏 Pedir ayuda
+                    {rolling ? 'Sorteando…' : spinPhase === 'done' ? `Otra tirada — ${rollCost} 🪙` : `Abrir caja por ${rollCost} 🪙`}
                   </button>
-                  <p className="text-[10px] text-tg-hint text-center">
-                    Aparece un aviso para que otros jugadores te regalen 10 🪙
-                  </p>
+
+                  <p className="text-xs text-tg-hint text-center">Saldo actual: {coins} 🪙</p>
+
+                  {isBroke && (
+                    <div className="flex flex-col items-center gap-1 pt-2 border-t border-tg-bg-sec">
+                      <p className="text-[11px] text-tg-hint text-center">Sin letras ni monedas suficientes</p>
+                      <button
+                        onClick={() => socket?.emit('beg')}
+                        className="bg-amber-500 text-white font-semibold rounded-xl py-2 px-6 active:opacity-80"
+                      >
+                        🙏 Pedir ayuda
+                      </button>
+                      <p className="text-[10px] text-tg-hint text-center">
+                        Aparece un aviso para que otros jugadores te regalen 10 🪙
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* ── Roulette spinning phase ── */}
+              {spinPhase === 'spinning' && (
+                <div className="flex flex-col items-center gap-4">
+                  <p className="text-sm text-tg-hint text-center animate-pulse">¡Girando la ruleta…!</p>
+
+                  {/* Roulette viewport */}
+                  <div
+                    className="relative w-full overflow-hidden rounded-xl border-2 border-tg-button/50"
+                    style={{ height: '80px' }}
+                  >
+                    {/* Center pointer */}
+                    <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5 bg-tg-button z-10 pointer-events-none" />
+                    <div className="absolute top-0 left-1/2 -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-8 border-l-transparent border-r-transparent border-t-tg-button z-10 pointer-events-none" />
+
+                    {/* Scrolling strip */}
+                    <div
+                      ref={stripRef}
+                      className="flex gap-2 items-center absolute top-0 left-0 h-full will-change-transform"
+                      style={{ paddingLeft: '8px' }}
+                    >
+                      {spinStrip.map((rarity, i) => {
+                        const m = RARITY_META[rarity] || RARITY_META['común'];
+                        return (
+                          <div
+                            key={i}
+                            className={`shrink-0 flex flex-col items-center justify-center rounded-lg border-2 ${m.stripBg} ${m.stripBorder} select-none`}
+                            style={{ width: `${ITEM_W}px`, height: '64px' }}
+                          >
+                            <span className="text-xl leading-none">{m.emoji}</span>
+                            <span className={`text-[11px] font-bold leading-tight mt-0.5 ${m.stripText}`}>{m.shortLabel}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-tg-hint text-center">Saldo actual: {coins} 🪙</p>
                 </div>
               )}
+
+              {/* ── Card reveal phase ── */}
+              {spinPhase === 'cards' && pendingResult && (() => {
+                const meta = RARITY_META[pendingResult.rarity] || RARITY_META['común'];
+                const letters = pendingResult.newLetters;
+                const allRevealed = revealedCards.length === letters.length;
+                return (
+                  <div className="flex flex-col items-center gap-4">
+                    {/* Rarity banner */}
+                    <div className={`w-full rounded-xl py-2 text-center ${meta.bgClass}`}>
+                      <p className={`text-lg font-black tracking-wider ${meta.textClass}`}>
+                        {meta.emoji} {meta.label}
+                      </p>
+                      {meta.celebrationEmoji && (
+                        <p className="text-xl animate-bounce">{meta.celebrationEmoji}</p>
+                      )}
+                    </div>
+
+                    <p className="text-sm text-tg-hint text-center">
+                      {allRevealed ? '¡Todas las letras reveladas!' : 'Toca cada carta para revelarla'}
+                    </p>
+
+                    {/* Cards grid */}
+                    <div className="flex flex-wrap justify-center gap-3">
+                      {letters.map((letter, i) => {
+                        const flipped = revealedCards.includes(i);
+                        return (
+                          <button
+                            key={i}
+                            onClick={() => handleFlipCard(i)}
+                            disabled={flipped}
+                            className="relative select-none"
+                            style={{
+                              width: '64px',
+                              height: '80px',
+                              perspective: '400px',
+                            }}
+                            aria-label={flipped ? `Letra ${letter}` : 'Carta oculta'}
+                          >
+                            {/* Card inner (flip container) */}
+                            <div
+                              style={{
+                                position: 'absolute', inset: 0,
+                                transformStyle: 'preserve-3d',
+                                transition: 'transform 0.5s cubic-bezier(0.4,0,0.2,1)',
+                                transform: flipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
+                              }}
+                            >
+                              {/* Card back */}
+                              <div
+                                style={{ backfaceVisibility: 'hidden' }}
+                                className={`absolute inset-0 rounded-xl border-2 ${meta.stripBorder} ${meta.stripBg} flex items-center justify-center`}
+                              >
+                                <span className="text-2xl">🎴</span>
+                              </div>
+                              {/* Card front (shown when flipped) */}
+                              <div
+                                style={{ backfaceVisibility: 'hidden', transform: 'rotateY(180deg)' }}
+                                className={`absolute inset-0 rounded-xl border-2 ${meta.stripBorder} ${meta.chipClass} flex items-center justify-center`}
+                              >
+                                <span className="text-2xl font-black">{letterLabel(letter)}</span>
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Reveal all shortcut — always in DOM to avoid layout shift */}
+                    <button
+                      onClick={handleRevealAll}
+                      className={`text-xs text-tg-hint underline active:opacity-60 mt-1 transition-opacity duration-300 ${allRevealed ? 'opacity-0 pointer-events-none' : ''}`}
+                    >
+                      Revelar todo
+                    </button>
+                  </div>
+                );
+              })()}
+
             </div>
           )}
 
