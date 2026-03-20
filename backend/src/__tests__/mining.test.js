@@ -279,17 +279,24 @@ describe('swing', () => {
       );
     });
 
-    test('caps the found letter level at MAX_LETTER_LEVEL', () => {
-      const invFull = { a: MAX_LETTER_LEVEL };
-      requireUser.mockReturnValue(makeUser({ pickaxe_hits: 5, inventory_json: JSON.stringify(invFull) }));
-      requireRoomMember.mockReturnValue(makeUser({ pickaxe_hits: 5, inventory_json: JSON.stringify(invFull) }));
-      stmts.getRoomMember.get.mockReturnValue(makeUser({ pickaxe_hits: 4, inventory_json: JSON.stringify(invFull) }));
+    test('all letters at cap: awards coins instead of a letter', () => {
+      // Build an inventory where every letter is at MAX_LETTER_LEVEL
+      const invAll = {};
+      'abcdefghijklmnopqrstuvwxyzñ'.split('').forEach((l) => { invAll[l] = MAX_LETTER_LEVEL; });
+      requireUser.mockReturnValue(makeUser({ pickaxe_hits: 5, inventory_json: JSON.stringify(invAll) }));
+      requireRoomMember.mockReturnValue(makeUser({ pickaxe_hits: 5, inventory_json: JSON.stringify(invAll) }));
+      stmts.getRoomMember.get.mockReturnValue(makeUser({ pickaxe_hits: 4, inventory_json: JSON.stringify(invAll) }));
 
       const result = swing(1);
 
       expect(result.found).toBe(true);
-      expect(result.letter).toBe('a');
-      expect(result.newInventory['a']).toBe(MAX_LETTER_LEVEL); // must not exceed cap
+      expect(result.allCapped).toBe(true);
+      expect(result.letter).toBeNull();
+      expect(result.coinBonus).toBeGreaterThan(0);
+      // updateRoomInventory must NOT be called — nothing changed
+      expect(stmts.updateRoomInventory.run).not.toHaveBeenCalled();
+      // coins must be credited
+      expect(stmts.updateRoomCoins.run).toHaveBeenCalledWith(result.coinBonus, 0, 1);
     });
 
     test('adds a new letter key to inventory if not previously owned', () => {

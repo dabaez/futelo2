@@ -21,6 +21,7 @@ const {
   GAMBLING_WIN_LETTERS,
   GAMBLING_ERRORS,
   MAX_LETTER_LEVEL,
+  CAP_OVERFLOW_COINS_PER_LETTER,
 } = require('../config');
 
 const ALPHABET = 'abcdefghijklmnopqrstuvwxyzñ';
@@ -205,11 +206,18 @@ function closeLottery(roundId) {
       const winnerRm   = stmts.getRoomMember.get(roomId, winnerId);
       const winnerUser = requireUser(winnerId);
       const inv        = JSON.parse(winnerRm.inventory_json);
-      inv[round.secret_letter] = Math.min(
-        (inv[round.secret_letter] || 0) + GAMBLING_WIN_LETTERS,
-        MAX_LETTER_LEVEL,
-      );
-      stmts.updateRoomInventory.run(JSON.stringify(inv), roomId, winnerId);
+
+      const currentLevel  = inv[round.secret_letter] || 0;
+      const levelsGranted = Math.min(GAMBLING_WIN_LETTERS, MAX_LETTER_LEVEL - currentLevel);
+      const levelsWasted  = GAMBLING_WIN_LETTERS - levelsGranted;
+
+      if (levelsGranted > 0) {
+        inv[round.secret_letter] = currentLevel + levelsGranted;
+        stmts.updateRoomInventory.run(JSON.stringify(inv), roomId, winnerId);
+      }
+      if (levelsWasted > 0) {
+        stmts.updateRoomCoins.run(levelsWasted * CAP_OVERFLOW_COINS_PER_LETTER, roomId, winnerId);
+      }
 
       const freshRm = stmts.getRoomMember.get(roomId, winnerId);
       return {

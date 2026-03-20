@@ -55,7 +55,7 @@ jest.mock('../db/database', () => ({
 // Import engine AFTER the mock is set up
 const { processMessage, shopRoll, letterRequirements } = require('../engine/processMessage');
 const { requireUser, requireRoomMember, stmts } = require('../db/database');
-const { MAX_LETTER_LEVEL, TIER1_COINS, TIER3_PENALTY, ROLL_COST, LOCK_DURATION_SEC, FIRST_MESSAGE_LETTERS } = require('../config');
+const { MAX_LETTER_LEVEL, TIER1_COINS, TIER3_PENALTY, ROLL_COST, LOCK_DURATION_SEC, FIRST_MESSAGE_LETTERS, CAP_OVERFLOW_COINS_PER_LETTER } = require('../config');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function makeUser(overrides = {}) {
@@ -358,6 +358,24 @@ describe('processMessage – first message bonus', () => {
     }
   });
 
+  test('never grants a level above MAX_LETTER_LEVEL even with a near-cap inventory', () => {
+    // Start with most letters at MAX_LETTER_LEVEL - 1 (one slot away from cap)
+    const nearCap = {};
+    for (const l of 'abcdefghijklmnopqrstuvwxyzñ') nearCap[l] = MAX_LETTER_LEVEL - 1;
+    // 'a' needs level 1 for the message validation; set it explicitly
+    nearCap.a = Math.max(1, MAX_LETTER_LEVEL - 1);
+    setupUser(makeUser({ inventory_json: JSON.stringify(nearCap) }));
+    setupGameState({ lastSenderId: 999 });
+    mockStmts.getRoomMemberMessageCount.get.mockReturnValue({ cnt: 0 });
+    stmts.getRoomMember.get.mockReturnValue(makeUser({ coins: 100 + TIER1_COINS }));
+
+    const result = processMessage(1, 'a');
+
+    for (const [, level] of Object.entries(result.newInventory)) {
+      expect(level).toBeLessThanOrEqual(MAX_LETTER_LEVEL);
+    }
+  });
+
   test('does NOT grant letters on subsequent messages (cnt > 0)', () => {
     setupUser(makeUser());
     setupGameState({ lastSenderId: 999 });
@@ -436,9 +454,7 @@ describe('shopRoll', () => {
     }
   });
 
-  test('letter level is capped at MAX_LETTER_LEVEL even when the letter is already maxed', () => {
-    // Pre-fill every possible inventory key at the cap so any roll hits a maxed slot.
-    // WEIGHTED_POOL includes _numbers and _symbols, so those must be seeded too.
+  test('all inventory slots at cap: waives cost, returns coinBonus, allCapped=true', () => {
     const fullInv = {};
     for (const l of 'abcdefghijklmnopqrstuvwxyzñ') fullInv[l] = MAX_LETTER_LEVEL;
     fullInv._numbers = MAX_LETTER_LEVEL;
@@ -446,11 +462,37 @@ describe('shopRoll', () => {
     const user = makeUser({ coins: 500, inventory_json: JSON.stringify(fullInv) });
     requireUser.mockReturnValue(user);
     requireRoomMember.mockReturnValue(user);
-    stmts.getRoomMember.get.mockReturnValue({ ...user, coins: 150 });
+    // Coins increase (cost waived + coinBonus added) — exact amount depends on tier
+    stmts.getRoomMember.get.mockReturnValue({ ...user, coins: 500 + CAP_OVERFLOW_COINS_PER_LETTER * 3 });
 
     const result = shopRoll(1);
+
+    expect(result.allCapped).toBe(true);
+    expect(result.newLetters).toHaveLength(0);
+    expect(result.coinBonus).toBeGreaterThan(0);
+    expect(result.rollCost).toBe(0);
+    // Coins increase because cost is waived and bonus is credited
+    expect(result.newCoins).toBeGreaterThanOrEqual(500);
+  });
+
+  test('steers picks exclusively to uncapped letters when some are at cap', () => {
+    // Every slot at cap except 'z' — every picked letter must be 'z'
+    const almostFull = {};
+    for (const l of 'abcdefghijklmnopqrstuvwxyzñ') almostFull[l] = MAX_LETTER_LEVEL;
+    almostFull._numbers = MAX_LETTER_LEVEL;
+    almostFull._symbols = MAX_LETTER_LEVEL;
+    almostFull.z = 0; // only 'z' has room
+    const user = makeUser({ coins: 500, inventory_json: JSON.stringify(almostFull) });
+    requireUser.mockReturnValue(user);
+    requireRoomMember.mockReturnValue(user);
+    stmts.getRoomMember.get.mockReturnValue({ ...user, coins: 450 });
+
+    const result = shopRoll(1);
+
+    expect(result.allCapped).toBe(false);
+    expect(result.newLetters.length).toBeGreaterThanOrEqual(1);
     for (const letter of result.newLetters) {
-      expect(result.newInventory[letter]).toBe(MAX_LETTER_LEVEL);
+      expect(letter).toBe('z');
     }
   });
 });
