@@ -273,6 +273,11 @@ app.post('/api/message', authMiddleware, (req, res) => {
     const payload = buildMessagePayload(user, text, result);
     io.to(`room:${roomId}`).emit('new_message', payload);
 
+    // Mirror to Telegram thread if configured
+    const senderName = user.first_name || user.username || 'Alguien';
+    const preview    = text.length > 60 ? `${text.slice(0, 57)}…` : text;
+    postToRoomThread(roomId, `💬 ${senderName}: ${preview}`);
+
     res.json({ ok: true, ...result });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -762,7 +767,7 @@ async function postToRoomThread(roomId, text) {
   try {
     await bot.api.sendMessage(roomId, text, opts);
   } catch (err) {
-    console.warn(`[Thread Push] Room ${roomId}: ${err.message}`);
+    console.error(`[Thread Push] Room ${roomId}: ${err.message}`);
   }
 }
 

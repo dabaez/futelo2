@@ -92,7 +92,7 @@ bot.command('start', async (ctx) => {
         : '\n⚠️ _Modo guardián activado pero el bot no tiene permisos para borrar mensajes. Usa /gatekeeper para desactivarlo o házlo administrador con «Eliminar mensajes»._\n';
     }
 
-    await ctx.reply(
+    const sent = await ctx.reply(
       `👋 ¡Hola, *${tgUser.first_name || 'jugador'}*!\n\n` +
       `*Futelo* es un juego de chat con inventario de letras.\n` +
       `Escribe mensajes usando tu teclado de letras, gana Monedas y construye tu abecedario.\n` +
@@ -100,6 +100,11 @@ bot.command('start', async (ctx) => {
       `\nPulsa el botón para abrir la app ⬇️`,
       { parse_mode: 'Markdown', reply_markup: keyboard }
     );
+    try {
+      await bot.api.pinChatMessage(chat.id, sent.message_id, { disable_notification: true });
+    } catch {
+      // No pin permission — silently ignore
+    }
   } else {
     // DM with the bot — tell the user to open from a group
     await ctx.reply(
@@ -148,12 +153,19 @@ bot.command('gatekeeper', async (ctx) => {
   }
 
   setRoomGatekeeper(chat.id, nowEnabled);
+  // Also sync thread-delete so gatekeeper controls both surfaces
+  stmts.setNotifyThreadDelete.run(nowEnabled ? 1 : 0, chat.id);
   // Invalidate cached permission so it's re-checked on next use
   canDeleteCache.delete(chat.id);
 
+  const room2 = stmts.getRoomById.get(chat.id);
+  const threadNote = nowEnabled && room2?.notify_thread_id !== null && room2?.notify_thread_id !== undefined
+    ? '\n_Los mensajes de usuarios en el hilo de espejo también serán eliminados._'
+    : '';
+
   await ctx.reply(
     nowEnabled
-      ? '🗑️ *Modo guardián activado.* Los mensajes de Telegram serán borrados; la conversación ocurre en la app.'
+      ? `🗑️ *Modo guardián activado.* Los mensajes de Telegram serán borrados; la conversación ocurre en la app.${threadNote}`
       : '✅ *Modo guardián desactivado.* Los mensajes de Telegram ya no serán borrados.',
     { parse_mode: 'Markdown' }
   );
@@ -196,48 +208,11 @@ bot.command('setthread', async (ctx) => {
   await ctx.reply(
     `\u2705 *Espejo de mensajes activado.*\n` +
     `Futelo publicar\u00e1 un resumen de cada mensaje en el ${where}.\n\n` +
-    `Para activar la eliminaci\u00f3n autom\u00e1tica de respuestas de usuarios en ese hilo usa */setthreaddelete*.`,
+    `Para que los usuarios no puedan responder en ese hilo activa el modo guardi\u00e1n con */gatekeeper*.`,
     { parse_mode: 'Markdown' }
   );
 });
 
-// ── /setthreaddelete ────────────────────────────────────────────────────────
-// Toggles auto-deletion of user replies in the configured mirror thread.
-// When enabled the bot deletes any non-bot message posted to that thread.
-bot.command('setthreaddelete', async (ctx) => {
-  const chat = ctx.chat;
-  if (!chat || (chat.type !== 'group' && chat.type !== 'supergroup')) {
-    await ctx.reply('Este comando solo funciona en grupos.');
-    return;
-  }
-
-  const member  = await ctx.getChatMember(ctx.from.id);
-  const isAdmin = member.status === 'administrator' || member.status === 'creator';
-  if (!isAdmin) {
-    await ctx.reply('\u26d4 Solo los administradores pueden cambiar esta opci\u00f3n.');
-    return;
-  }
-
-  const room       = stmts.getRoomById.get(chat.id);
-  const wasEnabled = room?.notify_thread_delete === 1;
-  const nowEnabled = !wasEnabled;
-
-  if (nowEnabled && (room?.notify_thread_id === null || room?.notify_thread_id === undefined)) {
-    await ctx.reply(
-      '\u26a0\ufe0f Primero configura un hilo con */setthread*.',
-      { parse_mode: 'Markdown' }
-    );
-    return;
-  }
-
-  stmts.setNotifyThreadDelete.run(nowEnabled ? 1 : 0, chat.id);
-  await ctx.reply(
-    nowEnabled
-      ? '\ud83d\uddd1\ufe0f *Borrado autom\u00e1tico activado.* Los mensajes de usuarios en el hilo de notificaciones ser\u00e1n eliminados.'
-      : '\u2705 *Borrado autom\u00e1tico desactivado.*',
-    { parse_mode: 'Markdown' }
-  );
-});
 
 
 // ── Gatekeeper + per-room thread delete message handler ──────────────────
