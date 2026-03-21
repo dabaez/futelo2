@@ -44,6 +44,67 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173) in a browser.
 
+---
+
+## Environment Variables
+
+### `backend/.env`
+
+| Variable | Required | Description |
+|---|---|---|
+| `DEV_MODE` | dev only | Set `true` to skip Telegram auth entirely. Accepts `dev:USER_ID:username:First Name` tokens. **Never `true` in production.** |
+| `SERVER_PORT` | yes | Port the Express server listens on. Default: `3001`. |
+| `BOT_TOKEN` | prod only | Telegram bot token from [@BotFather](https://t.me/BotFather). Not needed when `DEV_MODE=true`. |
+| `BOT_TOKEN_HASH` | prod only | Pre-computed HMAC key used to validate Telegram WebApp `initData`. Set to the same value as `BOT_TOKEN` — the server derives the key itself. Leave blank to have it computed automatically. |
+| `BOT_MODE` | prod | `polling` (default, good for local) or `webhook` (required in production). |
+| `WEBHOOK_DOMAIN` | prod, webhook | Full HTTPS URL of your server, e.g. `https://your-domain.com`. Used to register the webhook with Telegram. |
+| `MINI_APP_URL` | prod | URL where the frontend is served, e.g. `https://your-domain.com`. Shown in the `/start` group reply button. |
+| `MINI_APP_DIRECT_LINK` | prod | Direct Mini App deeplink from BotFather (format: `https://t.me/your_bot/your_app`). Without this the `/start` button opens a plain URL with no Telegram context. |
+| `DOMAIN` | prod | Bare domain name, e.g. `your-domain.com`. Used by deploy scripts and Nginx config. |
+| `NOTIFY_CHANNEL_ID` | optional | Telegram channel ID where game notifications are posted. The bot must be an admin. Leave empty to disable. |
+
+**Minimal dev setup** — only two variables are needed:
+
+```env
+DEV_MODE=true
+SERVER_PORT=3001
+```
+
+**Minimal production setup:**
+
+```env
+DEV_MODE=false
+SERVER_PORT=3001
+BOT_TOKEN=123456:ABC-your-token
+BOT_MODE=webhook
+WEBHOOK_DOMAIN=https://your-domain.com
+MINI_APP_URL=https://your-domain.com
+MINI_APP_DIRECT_LINK=https://t.me/your_bot_username/your_app_name
+DOMAIN=your-domain.com
+```
+
+---
+
+### `frontend/.env`
+
+| Variable | Required | Description |
+|---|---|---|
+| `VITE_BACKEND_URL` | prod only | Full URL of the backend API, e.g. `https://your-domain.com`. Leave **empty** in local dev — Vite proxies `/api` and `/socket.io` to `localhost:3001` automatically. |
+
+**Local dev** — leave the file empty (or omit it entirely):
+
+```env
+VITE_BACKEND_URL=
+```
+
+**Production:**
+
+```env
+VITE_BACKEND_URL=https://your-domain.com
+```
+
+---
+
 ### Testing Without Telegram
 
 When `DEV_MODE=true` and you open the app in a plain browser, a **Dev User Picker** screen appears. Preset users (Alice, Bob, etc.) all share a default **Dev Room** (`-1001`). Open a second tab and pick a different user to simulate two players chatting.
@@ -97,7 +158,7 @@ Requires:
 | Lanzar un prompt | configurable 🪙 | Inicia un prompt comunitario inmediatamente |
 | Vender letra (mercado normal) | — | Lista la letra; comprador paga; 20% comisión |
 | Vender letra (mercado negro) | — | Sin comisión, pero con riesgo de multa |
-| Pico (minas) | 30 🪙 | Obtén 10 golpes para usar en las minas |
+| Pico (minas) | 150 🪙 base + 2 🪙 × niveles totales | Obtén 1000 golpes para usar en las minas |
 
 #### Cajas — Rareza del resultado
 
@@ -147,9 +208,9 @@ Un mini-juego de apuestas periódico:
 
 Un mini-juego de exploración individual:
 
-- Compra un pico en la tienda por 30 🪙 (otorga 10 golpes).
+- Compra un pico en la tienda por 150 🪙 base + 2 🪙 por cada nivel de inventario que ya tengas (mismo escalado que las cajas). Otorga 1000 golpes.
 - Toca la roca en la pestaña ⛏️ Minas para gastar un golpe.
-- Cada golpe tiene un 40% de probabilidad de encontrar una letra aleatoria (+1 nivel en el inventario, máx. 6).
+- Cada golpe tiene un **1% de probabilidad** de encontrar una letra aleatoria (+1 nivel en el inventario, máx. 6). De media, ~1 hallazgo cada 100 golpes.
 - Los picos se acumulan — puedes comprar varios seguidos.
 - Es una actividad en solitario; no se emiten eventos a otros jugadores.
 
@@ -167,7 +228,7 @@ Las alertas por usuario (p.ej. "tu letra se vendió") se **persisten en la DB**.
 
 ```bash
 cd backend && npm test   # Jest + supertest  (208 tests, 8 suites)
-cd frontend && npm test  # Vitest + Testing Library  (35 tests, 2 suites)
+cd frontend && npm test  # Vitest + Testing Library  (39 tests, 2 suites)
 ```
 
 ### Backend test suites
@@ -178,7 +239,7 @@ cd frontend && npm test  # Vitest + Testing Library  (35 tests, 2 suites)
 | `engine.test.js` | 32 | `letterRequirements`, all tiers, first-message bonus, coin floor, `shopRoll` |
 | `market.test.js` | 27 | Regular and black-market list/buy/cancel, commission, `bmBuyListing` |
 | `blackMarket.test.js` | 16 | Heat decay, `catchProbability`, `runCatchCheck`, expiry |
-| `mining.test.js` | 18 | `buyPickaxe`, `swing`, hit/miss probability, inventory cap |
+| `mining.test.js` | 18 | `buyPickaxe` (scaled cost), `swing`, hit/miss probability, inventory cap |
 | `prompt.test.js` | 21 | `buyPrompt`, `submitReply`, `castVote`, `closePrompt` with all edge cases |
 | `lottery.test.js` | 14 | `startLottery`, `placeBet`, `closeLottery`, `getActiveLottery` |
-| `api.test.js` | 62 | All REST endpoints end-to-end with a real SQLite DB |
+| `api.test.js` | 59 | All REST endpoints end-to-end with a real SQLite DB |
