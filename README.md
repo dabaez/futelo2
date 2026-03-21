@@ -164,13 +164,31 @@ Requires:
 
 | Rareza | Letras ganadas | Probabilidad |
 |--------|---------------|--------------|
-| 📦 Común | 1 | ~40% |
-| ✨ Bueno | 3 | ~35% |
-| ⭐ Raro | 5 | ~18% |
-| 💫 Épico | 8 | ~6% |
-| 🏆 Legendario | 12 | ~1% |
+| 📦 Común | 3 | ~40% |
+| ✨ Bueno | 5 | ~35% |
+| ⭐ Raro | 7 | ~18% |
+| 💫 Épico | 11 | ~6% |
+| 🏆 Legendario | 16 | ~1% |
+
+Media de letras por tirada: **~5**.
 
 Las raridades más altas muestran animaciones, efectos y haptics en la UI de Telegram.
+
+#### Inventario al límite (nivel cap)
+
+Cuando **todas** las letras del inventario están al máximo (`MAX_LETTER_LEVEL = 6`), el servidor:
+- **Anula el coste** de la tirada.
+- **Otorga monedas** en su lugar (`CAP_OVERFLOW_COINS_PER_LETTER` × letras del tier).
+
+Esto aplica también a las minas (swing con inventario lleno → monedas) y a la lotería (niveles desbordados → monedas). Los niveles de bono **nunca** se desperdician en silencio.
+
+#### Animación de apertura
+
+Al abrir una caja, la interfaz muestra:
+1. Una **tira de ruleta** horizontal que decelera hasta la rareza ganada.
+2. Cartas boca abajo — una por letra ganada — que el jugador toca para revelarlas.
+
+Si el inventario está lleno, las fases de cartas se omiten y se muestra directamente el bonus de monedas.
 
 ### Letter Market
 
@@ -211,6 +229,7 @@ Un mini-juego de exploración individual:
 - Compra un pico en la tienda por 150 🪙 base + 2 🪙 por cada nivel de inventario que ya tengas (mismo escalado que las cajas). Otorga 1000 golpes.
 - Toca la roca en la pestaña ⛏️ Minas para gastar un golpe.
 - Cada golpe tiene un **1% de probabilidad** de encontrar una letra aleatoria (+1 nivel en el inventario, máx. 6). De media, ~1 hallazgo cada 100 golpes.
+- Si el inventario ya está completo, el golpe otorga monedas en lugar de una letra.
 - Los picos se acumulan — puedes comprar varios seguidos.
 - Es una actividad en solitario; no se emiten eventos a otros jugadores.
 
@@ -227,7 +246,7 @@ Las alertas por usuario (p.ej. "tu letra se vendió") se **persisten en la DB**.
 ## Tests
 
 ```bash
-cd backend && npm test   # Jest + supertest  (208 tests, 8 suites)
+cd backend && npm test   # Jest + supertest  (210 tests, 8 suites)
 cd frontend && npm test  # Vitest + Testing Library  (39 tests, 2 suites)
 ```
 
@@ -236,10 +255,10 @@ cd frontend && npm test  # Vitest + Testing Library  (39 tests, 2 suites)
 | Suite | Tests | What it covers |
 |-------|-------|---------------|
 | `auth.test.js` | 18 | Telegram HMAC + dev-token validation |
-| `engine.test.js` | 32 | `letterRequirements`, all tiers, first-message bonus, coin floor, `shopRoll` |
+| `engine.test.js` | 34 | `letterRequirements`, all tiers, first-message bonus (cap-ceiling), coin floor, `shopRoll` (allCapped path, steering to uncapped) |
 | `market.test.js` | 27 | Regular and black-market list/buy/cancel, commission, `bmBuyListing` |
 | `blackMarket.test.js` | 16 | Heat decay, `catchProbability`, `runCatchCheck`, expiry |
-| `mining.test.js` | 18 | `buyPickaxe` (scaled cost), `swing`, hit/miss probability, inventory cap |
+| `mining.test.js` | 18 | `buyPickaxe` (scaled cost), `swing`, hit/miss probability, all-caps coin fallback |
 | `prompt.test.js` | 21 | `buyPrompt`, `submitReply`, `castVote`, `closePrompt` with all edge cases |
-| `lottery.test.js` | 14 | `startLottery`, `placeBet`, `closeLottery`, `getActiveLottery` |
-| `api.test.js` | 59 | All REST endpoints end-to-end with a real SQLite DB |
+| `lottery.test.js` | 14 | `startLottery`, `placeBet`, `closeLottery`, `getActiveLottery`, cap overflow coins |
+| `api.test.js` | 62 | All REST endpoints end-to-end with a real SQLite DB |

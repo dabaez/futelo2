@@ -40,17 +40,23 @@ module.exports = {
    * Lootbox rarity tiers for the letter roll shop.
    * Each tier defines how many letter levels are awarded and its relative
    * selection weight. Weights are relative — they don't need to sum to 100.
-   * Average letters per roll ≈ 2.95 (same as the old fixed ROLL_COUNT: 3).
+   * Average letters per roll ≈ 5.03 (common floor raised from 1 → 3).
    */
   LOOTBOX_TIERS: [
-    { name: 'común',      letters: 1,  weight: 40 },
-    { name: 'bueno',      letters: 3,  weight: 35 },
-    { name: 'raro',       letters: 5,  weight: 18 },
-    { name: 'épico',      letters: 8,  weight: 6  },
-    { name: 'legendario', letters: 12, weight: 1  },
+    { name: 'común',      letters: 3,  weight: 40 },
+    { name: 'bueno',      letters: 5,  weight: 35 },
+    { name: 'raro',       letters: 7,  weight: 18 },
+    { name: 'épico',      letters: 11, weight: 6  },
+    { name: 'legendario', letters: 16, weight: 1  },
   ],
   /** Maximum unlock level any single letter can reach in a player's inventory. */
   MAX_LETTER_LEVEL: 6,
+  /**
+   * Coins awarded per letter-slot of a roll when ALL inventory slots are at MAX_LETTER_LEVEL.
+   * In that case the roll cost is waived and coins are given instead of letters.
+   * e.g. a Raro roll (7 slots) gives 7 × 15 = 105 coins.
+   */
+  CAP_OVERFLOW_COINS_PER_LETTER: 15,
   /**
    * Characters treated as symbols for the shared _symbols inventory group.
    * Must match the SYMBOL_CHARS constant in RestrictedKeyboard.jsx.

@@ -18,17 +18,20 @@ const {
   PICKAXE_HITS,
   MINE_HIT_CHANCE,
   MAX_LETTER_LEVEL,
+  CAP_OVERFLOW_COINS_PER_LETTER,
 } = require('../config');
 
 /** All valid letters that can be found while mining (includes ñ). */
-const ALPHABET = 'abcdefghijklmnopqrstuvwxyzñ';
+const ALPHABET_ARR = 'abcdefghijklmnopqrstuvwxyzñ'.split('');
 
 /**
- * Pick a single random letter from the mining alphabet.
- * @returns {string}
+ * Pick a random letter from the subset the player still has room to level up.
+ * Returns null when every letter is already at MAX_LETTER_LEVEL (all-capped).
  */
-function randomMineLetter() {
-  return ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
+function randomUncappedLetter(inventory) {
+  const uncapped = ALPHABET_ARR.filter((l) => (inventory[l] || 0) < MAX_LETTER_LEVEL);
+  if (uncapped.length === 0) return null;
+  return uncapped[Math.floor(Math.random() * uncapped.length)];
 }
 
 /**
@@ -90,33 +93,44 @@ function swing(userId, roomId = 0) {
     throw new Error('No tienes golpes restantes. Compra un pico para seguir minando.');
   }
 
-  const hit    = Math.random() < MINE_HIT_CHANCE;
-  const letter = hit ? randomMineLetter() : null;
+  const hit = Math.random() < MINE_HIT_CHANCE;
 
   let newInventory = null;
+  let letter       = null;
+  let coinBonus    = 0;
+  let allCapped    = false;
 
   db.transaction(() => {
     stmts.useRoomPickaxeHit.run(roomId, userId);
 
     if (hit) {
-      const inv = JSON.parse(rm.inventory_json || '{}');
-      inv[letter] = Math.min((inv[letter] || 0) + 1, MAX_LETTER_LEVEL);
-      stmts.updateRoomInventory.run(JSON.stringify(inv), roomId, userId);
-      newInventory = inv;
+      const inv          = JSON.parse(rm.inventory_json || '{}');
+      const uncapped     = randomUncappedLetter(inv);
+
+      if (uncapped === null) {
+        // Every letter is at max — award coins instead of a wasted swing
+        allCapped = true;
+        coinBonus = CAP_OVERFLOW_COINS_PER_LETTER;
+        stmts.updateRoomCoins.run(coinBonus, roomId, userId);
+        newInventory = inv;
+      } else {
+        letter       = uncapped;
+        inv[letter]  = Math.min((inv[letter] || 0) + 1, MAX_LETTER_LEVEL);
+        stmts.updateRoomInventory.run(JSON.stringify(inv), roomId, userId);
+        newInventory = inv;
+      }
     }
   })();
 
   const fresh = stmts.getRoomMember.get(roomId, userId);
 
-  if (hit && !newInventory) {
-    newInventory = JSON.parse(fresh.inventory_json || '{}');
-  }
-
   return {
     found:        hit,
     letter,
-    newInventory: hit ? newInventory : null,
+    newInventory: hit ? (newInventory ?? JSON.parse(fresh.inventory_json || '{}')) : null,
     hitsLeft:     fresh.pickaxe_hits,
+    allCapped,
+    coinBonus,
   };
 }
 

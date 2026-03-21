@@ -33,6 +33,7 @@ const {
   TIER3_PENALTY,
   MAX_LETTER_LEVEL,
   SYMBOL_CHARS,
+  CAP_OVERFLOW_COINS_PER_LETTER,
 } = require('../config');
 
 /**
@@ -81,13 +82,11 @@ function letterRequirements(text) {
   return req;
 }
 
-/**
- * Pick `n` random letters weighted toward common English letters
- * so early-game rewards feel useful.
- */
+// Uniform pool: every letter (a–z + ñ) appears once, plus number/symbol group keys.
+// No weighting — each pick is equally likely, so players get a spread across all letters.
 const WEIGHTED_POOL = [
-  ...('eeeeeeettttttaaaaooooiiiinnnnsssrrrhhhhddddllllccuuummmffppggwwybbvvkjxqzññ').split(''),
-  '_numbers', '_numbers', '_numbers',
+  ...'abcdefghijklmnopqrstuvwxyzñ'.split(''),
+  '_numbers', '_numbers',
   '_symbols', '_symbols',
 ];
 
@@ -206,8 +205,18 @@ function processMessage(userId, text, roomId = 0) {
   }
 
   // ── First-message bonus: one-time starter pack of letters ─────────────────
+  // Pick each letter from the portion of WEIGHTED_POOL that isn't yet capped,
+  // counting accumulating picks so no level is silently wasted.
   if (isFirstMessage) {
-    newLetters = randomLetters(FIRST_MESSAGE_LETTERS);
+    const pending = { ...inventory };
+    newLetters = [];
+    for (let i = 0; i < FIRST_MESSAGE_LETTERS; i++) {
+      const uncapped = WEIGHTED_POOL.filter((k) => (pending[k] || 0) < MAX_LETTER_LEVEL);
+      if (uncapped.length === 0) break; // all slots filled — extremely unlikely
+      const pick = uncapped[Math.floor(Math.random() * uncapped.length)];
+      newLetters.push(pick);
+      pending[pick] = (pending[pick] || 0) + 1;
+    }
   }
 
   // ── Step 5b: Block Tier-3 if user cannot cover the penalty ───────────────
@@ -305,8 +314,38 @@ function shopRoll(userId, roomId = 0) {
     throw new Error(`Monedas insuficientes. La tirada cuesta ${rollCost} 🪙 con tu inventario actual.`);
   }
 
-  const tier       = rollRarity();
-  const newLetters = randomLetters(tier.letters);
+  const tier = rollRarity();
+
+  // Build a pool restricted to letters/groups NOT yet at the level cap.
+  // This steers every roll toward completing the alphabet rather than
+  // silently wasting levels on already-maxed letters.
+  const uncappedPool = WEIGHTED_POOL.filter(
+    (key) => (inventory[key] || 0) < MAX_LETTER_LEVEL
+  );
+
+  // ── All letters at cap → waive cost, give coins instead ─────────────────
+  if (uncappedPool.length === 0) {
+    const coinBonus = tier.letters * CAP_OVERFLOW_COINS_PER_LETTER;
+    db.transaction(() => {
+      stmts.updateRoomCoins.run(coinBonus, roomId, userId);
+    })();
+    const fresh = stmts.getRoomMember.get(roomId, userId);
+    return {
+      newLetters:   [],
+      rarity:       tier.name,
+      newCoins:     fresh.coins,
+      newInventory: inventory,
+      rollCost:     0,
+      coinBonus,
+      allCapped:    true,
+    };
+  }
+
+  // ── Normal path: pick only from uncapped letters ─────────────────────────
+  const newLetters = [];
+  for (let i = 0; i < tier.letters; i++) {
+    newLetters.push(uncappedPool[Math.floor(Math.random() * uncappedPool.length)]);
+  }
 
   const updatedInventory = { ...inventory };
   for (const letter of newLetters) {
@@ -326,6 +365,8 @@ function shopRoll(userId, roomId = 0) {
     newCoins:     fresh.coins,
     newInventory: updatedInventory,
     rollCost,
+    coinBonus:    0,
+    allCapped:    false,
   };
 }
 

@@ -286,7 +286,7 @@ describe('closeLottery', () => {
     );
   });
 
-  test('caps winner letter level at MAX_LETTER_LEVEL', () => {
+  test('caps winner letter level at MAX_LETTER_LEVEL: gives overflow coins instead', () => {
     const round  = makeRound({ jackpot: 50, secret_letter: 'b', room_id: 0 });
     const bet    = makeBet({ id: 1, user_id: 5, letter: 'b' });
     const user   = makeUser({ id: 5, inventory_json: JSON.stringify({ b: MAX_LETTER_LEVEL }) });
@@ -298,10 +298,13 @@ describe('closeLottery', () => {
 
     closeLottery(1);
 
-    expect(stmts.updateRoomInventory.run).toHaveBeenCalledWith(
-      JSON.stringify({ b: MAX_LETTER_LEVEL }), // capped, not MAX_LETTER_LEVEL + GAMBLING_WIN_LETTERS
-      0, 5
-    );
+    // Already at cap — inventory should NOT be updated
+    expect(stmts.updateRoomInventory.run).not.toHaveBeenCalled();
+    // Overflow coins should be awarded: GAMBLING_WIN_LETTERS wasted levels × CAP_OVERFLOW_COINS_PER_LETTER
+    // updateRoomCoins is called twice: once for coinsEarned, once for overflow
+    const calls = stmts.updateRoomCoins.run.mock.calls;
+    const overflowCall = calls.find(([amount, , uid]) => uid === 5 && amount > 0 && amount !== round.jackpot);
+    expect(overflowCall).toBeDefined();
   });
 });
 

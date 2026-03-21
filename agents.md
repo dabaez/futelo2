@@ -107,13 +107,18 @@ module.exports = {
   ROLL_COST:            50,         // base cost (scales: +ROLL_COST_SCALE per total inventory level)
   ROLL_COST_SCALE:      2,
   LOOTBOX_TIERS: [
-    { name: 'común',      letters: 1,  weight: 40 },
-    { name: 'bueno',      letters: 3,  weight: 35 },
-    { name: 'raro',       letters: 5,  weight: 18 },
-    { name: 'épico',      letters: 8,  weight: 6  },
-    { name: 'legendario', letters: 12, weight: 1  },
-  ],
+    { name: 'común',      letters: 3,  weight: 40 },
+    { name: 'bueno',      letters: 5,  weight: 35 },
+    { name: 'raro',       letters: 7,  weight: 18 },
+    { name: 'épico',      letters: 11, weight: 6  },
+    { name: 'legendario', letters: 16, weight: 1  },
+  ],  // average: ~5 letters per roll
   MAX_LETTER_LEVEL:     6,
+  /**
+   * Coins per overflowed level when ALL inventory slots are at MAX_LETTER_LEVEL.
+   * Cost is waived; coins replace letters. Applies to shopRoll, swing, and closeLottery.
+   */
+  CAP_OVERFLOW_COINS_PER_LETTER: 15,
   SYMBOL_CHARS:         '!?.,:-()@#&*',
 
   // ── Prompts ──
@@ -283,9 +288,11 @@ Letters are NEVER consumed — they are unlock levels.
 Exported:
 - `processMessage(userId, text, roomId = 0)` — throws a user-facing `Error` on validation
   failure; returns a rich result object on success.
-- `shopRoll(userId)` — weighted-random lootbox roll. Costs `ROLL_COST` coins (scaled
+- `shopRoll(userId, roomId)` — weighted-random lootbox roll. Costs `ROLL_COST` coins (scaled
   by total inventory levels). Picks a tier from `LOOTBOX_TIERS` using `rollRarity()`.
-  Returns `{ newLetters, rarity, newCoins, newInventory, rollCost }`.
+  Picks letters only from the **uncapped** slice of `WEIGHTED_POOL` so no levels are wasted.
+  If ALL letters are at cap: waives cost, awards `tier.letters × CAP_OVERFLOW_COINS_PER_LETTER` coins.
+  Returns `{ newLetters, rarity, newCoins, newInventory, rollCost, coinBonus, allCapped }`.
 - `letterRequirements(text)` — pure helper, returns `{a:1, p:2, _numbers:1, _symbols:2, ...}`.
   Digits (0-9) are summed into `_numbers`; characters in `SYMBOL_CHARS` are summed into `_symbols`.
 
@@ -294,11 +301,12 @@ Exported:
 Manages the pickaxe / letter-mine mini-game. All constants come from `config.js`.
 
 - `buyPickaxe(userId)` — computes the scaled cost (`PICKAXE_COST + PICKAXE_COST_SCALE × Σinventory`), deducts it from the user's coins, and adds `PICKAXE_HITS` to their `pickaxe_hits` counter. Multiple purchases stack. Returns `{ newCoins, pickaxeHits, pickaxeCost }`.
-- `swing(userId)` — requires `pickaxe_hits > 0`. Decrements the counter by 1, then rolls
-  `Math.random() < MINE_HIT_CHANCE` for a find. On a hit, picks a random letter from
-  `'abcdefghijklmnopqrstuvwxyzñ'` and grants +1 inventory level (capped at `MAX_LETTER_LEVEL`).
-  Returns `{ found, letter, newInventory, hitsLeft }` — `letter` and `newInventory` are `null`
-  on a miss.
+- `swing(userId, roomId)` — requires `pickaxe_hits > 0`. Decrements the counter by 1, then rolls
+  `Math.random() < MINE_HIT_CHANCE` for a find. On a hit, picks a random letter from the
+  **uncapped** subset of the alphabet (letters below `MAX_LETTER_LEVEL`). If all letters are at
+  cap, awards `CAP_OVERFLOW_COINS_PER_LETTER` coins instead.
+  Returns `{ found, letter, newInventory, hitsLeft, allCapped, coinBonus }` — `letter` and
+  `newInventory` are `null` on a miss; `letter` is also `null` when `allCapped`.
 
 Both functions throw a user-facing `Error` on validation failure. All DB writes are wrapped
 in `db.transaction()`. Mining is a solo activity — no socket broadcast to other clients.
@@ -572,15 +580,33 @@ including those who were offline when the event occurred.
 
 `RARITY_META` object at module level defines per-tier visual treatment. Key fields:
 - `bgClass`, `textClass`, `chipClass` — full Tailwind class strings (no interpolation).
+- `stripBg`, `stripBorder`, `stripText`, `shortLabel` — used by the roulette strip items.
 - `animated` — enables `animate-bounce` on letter chips (staggered `animationDelay`).
 - `pulse` — enables `animate-pulse` on the result card backdrop (`épico`, `legendario`).
 - `legendary` — shows extra sparkle row below the letters.
 - `celebrationEmoji` — emoji row shown above the rarity label.
 
-Haptic feedback on roll result: `legendario` → `notificationOccurred('success')`;
+**Roulette strip**: on roll, a 70-item horizontal strip spins with RAF-based `easeOutQuint`
+deceleration over 4200 ms. The winner lands at `WINNER_IDX = 62`. Constants: `ITEM_W = 96`,
+`ITEM_GAP = 8`, `ITEM_STRIDE = 104`, `STRIP_TOTAL = 70`. The strip is built by `buildSpinStrip(winnerRarity)`
+and stored in `spinStrip` state **before** `setSpinPhase('spinning')` so the DOM is ready when the effect fires.
+
+**Card reveal phase**: after the strip stops, one face-down card per letter is shown.
+Clicking a card flips it (550 ms CSS `rotateY(180deg)` with `preserve-3d`).
+`handleFlipCard` / `handleRevealAll` wait 550 ms before transitioning to `'done'`
+so the last card's animation completes. `onPurchase` is called only at the end of this phase
+(stored in `onPurchaseRef` so the RAF callback can call it without being in its dependency array).
+
+**State machine**: `spinPhase`: `'idle'` | `'spinning'` | `'cards'` | `'done'`.
+The `'done'` phase also re-enables the roll button (`handleRoll` allows `'idle'` OR `'done'`).
+
+**All-capped path**: if `pendingResult.allCapped === true`, spin animation jumps directly to
+`'done'` (no card phase). The summary shows `+N 🪙` with `animate-bounce`.
+
+Haptic feedback on strip land: `legendario` → `notificationOccurred('success')`;
 `épico` → `impactOccurred('heavy')`; `raro` → `impactOccurred('medium')`.
 
-`rollResult` state is `{ letters: string[], rarity: string }` — **not a bare array**.
+`rollResult` state is `{ letters: string[], rarity: string, coinBonus?: number, allCapped?: boolean }` — **not a bare array**.
 
 ### RestrictedKeyboard Key Logic
 
@@ -747,18 +773,18 @@ Chat IDs for different tabs.
 
 - Config: `backend/jest.config.js` (`testEnvironment: 'node'`, `maxWorkers: 1`)
 - Run: `cd backend && npm test`
-- **208 tests across 8 suites** (all passing)
+- **210 tests across 8 suites** (all passing)
 
 | File | Tests | What it covers |
 |---|---|---|
 | `src/__tests__/auth.test.js` | 18 | `validateInitData` HMAC, `validateInitDataDev` dev tokens, chatId return values |
-| `src/__tests__/engine.test.js` | 32 | `letterRequirements` (incl. `_numbers`/`_symbols`), all 3 tiers, first-message bonus, coin floor, letter level cap, `shopRoll` (lootbox rarity), ñ support, transaction shape |
+| `src/__tests__/engine.test.js` | 34 | `letterRequirements` (incl. `_numbers`/`_symbols`), all 3 tiers, first-message bonus (cap-ceiling), coin floor, `shopRoll` (lootbox rarity, allCapped path, steering to uncapped), ñ support, transaction shape |
 | `src/__tests__/market.test.js` | 27 | `listLetter`, `buyListing`, `cancelListing`, `getOpenListings`, `getUserListings`, coin/letter cap invariants; BM factory isolation (`bmListLetter`, `bmBuyListing`, `bmCancelListing`, `getBmOpenListings`, `getBmUserListings`) |
 | `src/__tests__/blackMarket.test.js` | 16 | Heat decay, `addHeat`, `catchProbability`, `runCatchCheck`, listing expiry |
-| `src/__tests__/mining.test.js` | 18 | `buyPickaxe` (scaled cost), `swing`, hit/miss probability, inventory cap |
+| `src/__tests__/mining.test.js` | 18 | `buyPickaxe` (scaled cost), `swing`, hit/miss probability, all-capped coin fallback |
 | `src/__tests__/prompt.test.js` | 21 | `buyPrompt`, `getActivePrompt`, `submitReply` (all error paths + happy path), `castVote`, `closePrompt` (winner/runner-up distribution, tie-breaking, no-replies case) |
-| `src/__tests__/lottery.test.js` | 14 | `startLottery`, `placeBet` (invalid letter, no inventory, active-round guard), `closeLottery` (carry-over, winner coins+letters, `MAX_LETTER_LEVEL` cap), `getActiveLotteryRound` |
-| `src/__tests__/api.test.js` | 59 | All REST endpoints incl. P2P market + full BM flow + mining (scaled cost) + lottery + prompt, end-to-end with temp SQLite DB |
+| `src/__tests__/lottery.test.js` | 14 | `startLottery`, `placeBet` (invalid letter, no inventory, active-round guard), `closeLottery` (carry-over, winner coins+letters, cap overflow coins), `getActiveLotteryRound` |
+| `src/__tests__/api.test.js` | 62 | All REST endpoints incl. P2P market + full BM flow + mining (scaled cost) + lottery + prompt, end-to-end with temp SQLite DB |
 
 **Key patterns:**
 - `FUTELO_DATA_DIR` env override points the DB to a temp directory per test run.
@@ -805,8 +831,9 @@ Chat IDs for different tabs.
 | Engine error strings changed | Test regexes in `engine.test.js` and `api.test.js` must match the Spanish wording — e.g. `/vac/i` for empty, `/insuficiente/i` for not-enough, `/bloqueada/i` for locked. |
 | Seller misses sale toast when offline | Use `notifyUser()` — not a direct socket emit — so the notification persists until delivered. |
 | System messages missing from feed | Requires `id=0` user row (migration v5). Restart the server to re-run migrations on a fresh DB. |
-| `rollResult` shape changed | `rollResult` in `ShopModal` is `{ letters: string[], rarity: string }` — not a bare `string[]`. Access letters via `rollResult.letters`. |
+| `rollResult` shape changed | `rollResult` in `ShopModal` is `{ letters: string[], rarity: string, coinBonus?: number, allCapped?: boolean }` — not a bare `string[]`. Access letters via `rollResult.letters`. |
 | `pickaxeHits` not updating after mine | `ShopModal` maintains its own `hitsLeft` state synced from `initialPickaxeHits` prop via `useEffect`. The prop flows: server response → `onPurchase` → `updateUser` → `App.jsx` state → `pickaxeHits` prop → `ShopModal`. |
+| Mining/roll silently wastes capped levels | Never use `Math.min(level + n, MAX_LETTER_LEVEL)` on letters that may already be at cap — levels are lost. Always filter to uncapped letters first (see `randomUncappedLetter` in `mining.js` and the uncapped-pool logic in `shopRoll`). |
 | BM list fires "Compraste" toast | The buy toast in `handleBmPurchase` checks `result.newCoins !== undefined` — list responses omit `newCoins` so no toast fires. Do not add `newCoins` to the list response. |
 | Game state bleeds between groups | Every query that reads/writes game state (prompts, market, lottery, messages, streaks) must pass the correct `roomId`. Room 0 is the legacy global placeholder — do not use it in new code. |
 | BM heat is per-room | It is **not** per-room — BM heat is global. `getAllOpenBmListingsGlobal` scans all rooms. This is intentional. |
