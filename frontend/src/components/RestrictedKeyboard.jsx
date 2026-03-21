@@ -127,11 +127,11 @@ export default function RestrictedKeyboard({
 
   return (
     <div
-      className="w-full bg-tg-bg-sec px-1 pb-2 pt-1 select-none"
+      className="w-full bg-tg-bg-sec px-1 pb-2 pt-1 select-none overflow-hidden"
       style={{ touchAction: 'manipulation' }}
     >
       {activeRows.map((row, ri) => (
-        <div key={ri} className="flex justify-center gap-1 mb-1">
+        <div key={ri} className="flex justify-center gap-0.5 mb-1">
           {row.map((key) => {
             const isSpecial   = key in SPECIAL_LABELS;
             const isModeKey   = isMode(key);
@@ -171,9 +171,9 @@ export default function RestrictedKeyboard({
             } else if (isSpace) {
               cls += ' flex-1 h-11 min-w-0 mx-1 text-sm';
             } else if (isNumber || isSymbol) {
-              cls += ' w-9 h-11 text-sm';
+              cls += ' flex-1 min-w-0 max-w-[2.75rem] h-11 text-sm';
             } else {
-              cls += ' w-9 h-11 text-sm';
+              cls += ' flex-1 min-w-0 max-w-[2.75rem] h-11 text-sm';
             }
 
             // Colour
