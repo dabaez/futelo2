@@ -454,7 +454,7 @@ export default function App() {
       {draft && (
         <div className="bg-tg-bg border-t border-tg-bg-sec px-4 py-2 text-sm text-tg-text truncate animate-fade-in">
           <span className="text-tg-hint mr-1">{replyMode ? 'Respuesta al prompt:' : 'Borrador:'}</span>
-          <span>{draft}</span>
+          <span className="whitespace-pre-wrap">{draft}</span>
         </div>
       )}
 
