@@ -402,4 +402,22 @@ describe('RestrictedKeyboard', () => {
     fireEvent.pointerDown(aBtn);
     expect(onDraftChange).not.toHaveBeenCalled();
   });
+
+  // ── Key layout ──────────────────────────────────────────────────────────────
+  it('⌫ appears to the right of ñ in the letter layout', () => {
+    render(
+      <RestrictedKeyboard
+        draft=""
+        onDraftChange={noop}
+        onSend={noop}
+        inventory={{ ñ: 1 }}
+        lockedLetters={[]}
+      />
+    );
+    const allButtons = screen.getAllByRole('button');
+    const idxNn      = allButtons.findIndex((b) => b.getAttribute('aria-label') === 'ñ');
+    const idxBs      = allButtons.findIndex((b) => b.getAttribute('aria-label') === '⌫');
+    expect(idxNn).toBeGreaterThanOrEqual(0);
+    expect(idxBs).toBeGreaterThan(idxNn);
+  });
 });

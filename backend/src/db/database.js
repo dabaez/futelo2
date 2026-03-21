@@ -98,7 +98,7 @@ db.exec(`
 // Migrations never need to be run manually — they apply automatically on startup.
 //
 // IMPORTANT: never edit a past migration. Always append a new one.
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 14;
 
 const migrations = [
   // ── v1: P2P letter market ─────────────────────────────────────────────────
@@ -330,6 +330,13 @@ const migrations = [
   () => {
     db.exec('UPDATE rooms SET notify_thread_delete = 0');
   },
+
+  // v14 – migrate gatekeeper rooms to setthreaddelete
+  // /gatekeeper has been removed; rooms that had it enabled were opting into
+  // message deletion, so enable notify_thread_delete for them instead.
+  () => {
+    db.exec('UPDATE rooms SET notify_thread_delete = 1 WHERE gatekeeper = 1');
+  },
 ];
 
 // Apply any pending migrations inside a single transaction so a crash mid-way
@@ -556,8 +563,6 @@ const stmts = {
   `),
   getRoomById:        db.prepare('SELECT * FROM rooms WHERE id = ?'),
   getAllRooms:        db.prepare('SELECT id, title FROM rooms WHERE id != 0 ORDER BY created_at ASC'),
-  setRoomGatekeeper: db.prepare('UPDATE rooms SET gatekeeper = ? WHERE id = ?'),
-
   // ── Per-room streak tracking ───────────────────────────────────────────────
   getRoomStreak: db.prepare(
     'SELECT streak FROM room_member_streaks WHERE room_id = ? AND user_id = ?'
@@ -617,15 +622,6 @@ function requireRoom(roomId) {
 }
 
 /**
- * Enable or disable the gatekeeper (message deletion) for a room.
- * @param {number} id      Telegram chat_id
- * @param {boolean} enabled
- */
-function setRoomGatekeeper(id, enabled) {
-  stmts.setRoomGatekeeper.run(enabled ? 1 : 0, id);
-}
-
-/**
  * Ensure a room_members row exists for this user+room and return it.
  */
 function upsertRoomMember(userId, roomId) {
@@ -646,5 +642,5 @@ module.exports = {
   db, stmts,
   upsertUser, requireUser,
   upsertRoomMember, requireRoomMember,
-  upsertRoom, requireRoom, setRoomGatekeeper,
+  upsertRoom, requireRoom,
 };

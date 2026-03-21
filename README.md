@@ -247,7 +247,7 @@ Las alertas por usuario (p.ej. "tu letra se vendió") se **persisten en la DB**.
 
 ```bash
 cd backend && npm test   # Jest + supertest  (210 tests, 8 suites)
-cd frontend && npm test  # Vitest + Testing Library  (39 tests, 2 suites)
+cd frontend && npm test  # Vitest + Testing Library  (40 tests, 2 suites)
 ```
 
 ### Backend test suites
