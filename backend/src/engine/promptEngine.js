@@ -136,17 +136,17 @@ function submitReply(userId, promptId, text) {
   stmts.updateRoomCoins.run(PROMPT_REPLY_BONUS, prompt.room_id, userId);
   const fresh = stmts.getRoomMember.get(prompt.room_id, userId);
 
-  const reply = stmts.getPromptReplyById.get(result.lastInsertRowid);
-  const user  = fresh;
+  const reply    = stmts.getPromptReplyById.get(result.lastInsertRowid);
+  const userInfo = stmts.getUser.get(userId);
   return {
     id:        reply.id,
     promptId,
     userId,
     text:      trimmed,
     votes:     0,
-    username:  user.username,
-    firstName: user.first_name,
-    photoUrl:  user.photo_url,
+    username:  userInfo.username,
+    firstName: userInfo.first_name,
+    photoUrl:  userInfo.photo_url,
     createdAt: reply.created_at,
     replyBonus: PROMPT_REPLY_BONUS,
     newCoins:   fresh.coins,

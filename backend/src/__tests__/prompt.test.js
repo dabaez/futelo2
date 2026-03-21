@@ -22,6 +22,8 @@ const mockStmts = {
   // Votes
   insertVote:   { run: jest.fn() },
   getVoteCount: { get: jest.fn() },
+  // Users table (for username/first_name in reply payloads)
+  getUser: { get: jest.fn() },
   // Room-scoped coin / member stmts
   getRoomMember:       { get: jest.fn() },
   updateRoomCoins:     { run: jest.fn() },
@@ -195,6 +197,7 @@ describe('submitReply', () => {
     stmts.getPromptReplyById.get.mockReturnValue(reply);
     stmts.updateRoomCoins.run.mockReturnValue(undefined);
     stmts.getRoomMember.get.mockReturnValue({ ...user, coins: user.coins + PROMPT_REPLY_BONUS });
+    stmts.getUser.get.mockReturnValue({ ...user, username: 'alice', first_name: 'Alice', photo_url: null });
 
     const result = submitReply(1, 1, 'Mi respuesta');
 
@@ -202,6 +205,28 @@ describe('submitReply', () => {
     expect(result.text).toBe('Mi respuesta');
     expect(result.replyBonus).toBe(PROMPT_REPLY_BONUS);
     expect(result.newCoins).toBe(user.coins + PROMPT_REPLY_BONUS);
+  });
+
+  test('includes username and firstName from users table, not room_members', () => {
+    const prompt   = makePrompt({ room_id: 0 });
+    const user     = makeUser({ id: 1 });
+    const replyRow = makeReply({ id: 6, user_id: 1, text: 'Respuesta con nombre' });
+
+    stmts.getPromptById.get.mockReturnValue(prompt);
+    stmts.insertPromptReply.run.mockReturnValue({ lastInsertRowid: 6, changes: 1 });
+    stmts.getPromptReplyById.get.mockReturnValue(replyRow);
+    stmts.updateRoomCoins.run.mockReturnValue(undefined);
+    // room_members row deliberately has no username/first_name (mirrors real schema)
+    stmts.getRoomMember.get.mockReturnValue({ coins: user.coins + PROMPT_REPLY_BONUS });
+    // users table has the real name fields
+    stmts.getUser.get.mockReturnValue({ username: 'charlie', first_name: 'Charlie', photo_url: 'https://example.com/photo.jpg' });
+
+    const result = submitReply(1, 1, 'Respuesta con nombre');
+
+    expect(stmts.getUser.get).toHaveBeenCalledWith(1);
+    expect(result.username).toBe('charlie');
+    expect(result.firstName).toBe('Charlie');
+    expect(result.photoUrl).toBe('https://example.com/photo.jpg');
   });
 
   test('throws when user already replied (insertOrIgnore returns changes=0)', () => {

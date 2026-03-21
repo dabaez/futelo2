@@ -10,7 +10,6 @@
 
 ```
 futelo/
-├── agents.md             AI agent context (read before making changes)
 ├── README.md
 ├── deploy.sh             One-shot deployment script
 ├── backend/              Node.js server

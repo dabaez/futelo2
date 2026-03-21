@@ -495,6 +495,7 @@ app.post('/api/shop/prompt', authMiddleware, (req, res) => {
     io.to(`user:${req.tgUser.id}`).emit('user_update', {
       newCoins: result.newCoins,
     });
+    postToRoomThread(roomId, `📣 ¡Nuevo prompt! "${result.prompt.text}"`);
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -520,6 +521,7 @@ app.post('/api/lottery/start', authMiddleware, (req, res) => {
       coinDelta: -LOTTERY_START_COST,
       newLetters: [],
     });
+    postToRoomThread(roomId, `🎰 ¡Ronda de lotería iniciada! Apuesta una letra en la app.`);
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });

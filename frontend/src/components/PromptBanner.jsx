@@ -79,6 +79,11 @@ export default function PromptBanner({
       {/* ── Expanded content ────────────────────────────────────────── */}
       {expanded && (
         <div className="px-3 pb-3 flex flex-col gap-2">
+          {/* Full prompt text */}
+          <p className="text-xs text-tg-text font-semibold bg-tg-bg-sec rounded-lg px-3 py-2 break-words">
+            {prompt.text}
+          </p>
+
           {/* Error */}
           {promptError && (
             <p className="text-[11px] text-red-500 bg-red-50 rounded px-2 py-1">{promptError}</p>
