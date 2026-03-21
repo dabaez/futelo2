@@ -98,7 +98,7 @@ db.exec(`
 // Migrations never need to be run manually — they apply automatically on startup.
 //
 // IMPORTANT: never edit a past migration. Always append a new one.
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 
 const migrations = [
   // ── v1: P2P letter market ─────────────────────────────────────────────────
@@ -322,6 +322,13 @@ const migrations = [
       ALTER TABLE letter_locks_new RENAME TO letter_locks;
       CREATE INDEX IF NOT EXISTS idx_locks_user ON letter_locks(room_id, user_id, locked_until);
     `);
+  },
+
+  // v13 – reset notify_thread_delete that was accidentally set by gatekeeper coupling
+  // /gatekeeper briefly synced notify_thread_delete; this undoes that side-effect
+  // so thread-delete is only active when explicitly set via /setthreaddelete.
+  () => {
+    db.exec('UPDATE rooms SET notify_thread_delete = 0');
   },
 ];
 

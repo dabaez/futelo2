@@ -183,19 +183,12 @@ bot.command('gatekeeper', async (ctx) => {
   }
 
   setRoomGatekeeper(chat.id, nowEnabled);
-  // Also sync thread-delete so gatekeeper controls both surfaces
-  stmts.setNotifyThreadDelete.run(nowEnabled ? 1 : 0, chat.id);
   // Invalidate cached permission so it's re-checked on next use
   canDeleteCache.delete(chat.id);
 
-  const room2 = stmts.getRoomById.get(chat.id);
-  const threadNote = nowEnabled && room2?.notify_thread_id !== null && room2?.notify_thread_id !== undefined
-    ? '\n_Los mensajes de usuarios en el hilo de espejo también serán eliminados._'
-    : '';
-
   await ctx.reply(
     nowEnabled
-      ? `🗑️ *Modo guardián activado.* Los mensajes de Telegram serán borrados; la conversación ocurre en la app.${threadNote}`
+      ? '🗑️ *Modo guardián activado.* Los mensajes de Telegram serán borrados; la conversación ocurre en la app.'
       : '✅ *Modo guardián desactivado.* Los mensajes de Telegram ya no serán borrados.',
     { parse_mode: 'Markdown' }
   );
@@ -238,12 +231,48 @@ bot.command('setthread', async (ctx) => {
   await ctx.reply(
     `\u2705 *Espejo de mensajes activado.*\n` +
     `Futelo publicar\u00e1 un resumen de cada mensaje en el ${where}.\n\n` +
-    `Para que los usuarios no puedan responder en ese hilo activa el modo guardi\u00e1n con */gatekeeper*.`,
+    `Opcional: usa */setthreaddelete* para eliminar autom\u00e1ticamente las respuestas de usuarios en ese hilo.`,
     { parse_mode: 'Markdown' }
   );
 });
 
+// ── /setthreaddelete ────────────────────────────────────────────────────────
+// Toggles auto-deletion of user replies in the configured mirror thread.
+// Independent of /gatekeeper — only affects the mirror thread.
+bot.command('setthreaddelete', async (ctx) => {
+  const chat = ctx.chat;
+  if (!chat || (chat.type !== 'group' && chat.type !== 'supergroup')) {
+    await ctx.reply('Este comando solo funciona en grupos.');
+    return;
+  }
 
+  const member  = await ctx.getChatMember(ctx.from.id);
+  const isAdmin = member.status === 'administrator' || member.status === 'creator';
+  if (!isAdmin) {
+    await ctx.reply('\u26d4 Solo los administradores pueden cambiar esta opci\u00f3n.');
+    return;
+  }
+
+  const room       = stmts.getRoomById.get(chat.id);
+  const wasEnabled = room?.notify_thread_delete === 1;
+  const nowEnabled = !wasEnabled;
+
+  if (nowEnabled && (room?.notify_thread_id === null || room?.notify_thread_id === undefined)) {
+    await ctx.reply(
+      '\u26a0\ufe0f Primero configura un hilo con */setthread*.',
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  stmts.setNotifyThreadDelete.run(nowEnabled ? 1 : 0, chat.id);
+  await ctx.reply(
+    nowEnabled
+      ? '\ud83d\uddd1\ufe0f *Borrado autom\u00e1tico activado.* Las respuestas de usuarios en el hilo de espejo ser\u00e1n eliminadas.'
+      : '\u2705 *Borrado autom\u00e1tico desactivado.*',
+    { parse_mode: 'Markdown' }
+  );
+});
 
 // ── Gatekeeper + per-room thread delete message handler ──────────────────
 bot.on('message', async (ctx) => {
