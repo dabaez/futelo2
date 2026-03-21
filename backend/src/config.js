@@ -219,5 +219,13 @@ module.exports = {
     "Cuenta un chiste en un futelo",
     "Que harias si fueras presidente?",
     "Cuales serian tus ultimas palabras?",
+    "Cual es la wea mas chilena?",
+    "El mejor tip para ser exitoso:",
+    "El crossover mas ambicisio de la historia:",
+    "La secuela que todos estaban esperando:",
+    "Un plot twist que nadie vio venir:",
+    "Cual es el trabajo que jamas sera reemplazado por la IA?",
+    "Un pajarito me conto...",
+    "Sin importar cuantas personas lo digan, yo jamas voy a creer que...",
   ],
 };
