@@ -118,6 +118,33 @@ bot.command('start', async (ctx) => {
 
 
 
+// ── /help ──────────────────────────────────────────────────────────────────
+bot.command('help', async (ctx) => {
+  const isGroup = ctx.chat && (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup');
+  await ctx.reply(
+    `🎮 *Futelo — Guía rápida*\n\n` +
+    `*¿Cómo jugar?*\n` +
+    `Abre la app con el botón de abajo y escribe mensajes usando el teclado de letras. Cada letra tiene un nivel de inventario — ese nivel es el máximo de veces que puedes usar esa letra en un solo mensaje.\n\n` +
+    `*Monedas Anti-Spam*\n` +
+    `• +10 🪙 si eres el primero en responder después de otro jugador\n` +
+    `• 0 🪙 si repites turno (aviso)\n` +
+    `• −50 🪙 y una letra bloqueada si repites turno tres veces seguidas\n\n` +
+    `*¿Cómo consigo más letras?*\n` +
+    `• 🎰 *Caja* — gasta monedas para abrir una caja con letras\n` +
+    `• ⛏️ *Minas* — compra un pico y toca la roca para excavar letras\n` +
+    `• 🛒 *Mercado* — compra letras a otros jugadores\n\n` +
+    `*Funciones extra*\n` +
+    `• 📣 *Prompts* — lanza una pregunta al grupo y vota la mejor respuesta\n` +
+    `• 🎲 *Lotería* — apuesta letras a la letra secreta del round\n` +
+    `• 🕵️ *Mercado Negro* — accede dando tres toques al botón de la tienda (sin comisión, con riesgo)\n\n` +
+    (isGroup ? `*Comandos de admin*\n` +
+    `• /gatekeeper — borra mensajes de Telegram y fuerza el chat a la app\n` +
+    `• /setthread — espeja mensajes de la app en un hilo de Telegram\n` : '') +
+    `\nPulsa */start* para abrir la app. ¡Buena suerte! 🍀`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
 // ── /gatekeeper ────────────────────────────────────────────────────────────
 // Toggles message deletion for this specific group.
 // Only group admins can use it. Checks bot permissions when enabling.
