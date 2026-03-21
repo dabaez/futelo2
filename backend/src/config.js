@@ -130,8 +130,16 @@ module.exports = {
     'Apuesta rechazada por exceso de optimismo.',
   ],
   // ── Letter mines / pickaxe ─────────────────────────────────────────────────
-  /** Coins paid to buy one pickaxe (adds PICKAXE_HITS swings). */
-  PICKAXE_COST: 100,
+  // ── Mining balance ───────────────────────────────────────────────────────
+  // cost = PICKAXE_COST + PICKAXE_COST_SCALE × Σ(inventory values)
+  // Same scaling formula as the lootbox roll — gets more expensive as a player
+  // builds up their letter collection.
+  // 150 base + 2×30-level player = 210 coins → 1000 hits → 0.01 chance
+  // → ~10 expected letters/pickaxe, average ~100 swings between finds.
+  /** Base coin cost of one pickaxe (before inventory scaling). */
+  PICKAXE_COST: 150,
+  /** Extra coins added to pickaxe cost per total inventory level (mirrors ROLL_COST_SCALE). */
+  PICKAXE_COST_SCALE: 2,
   /** Number of swings a single pickaxe purchase provides. */
   PICKAXE_HITS: 1000,
   /** Probability (0–1) that a single swing uncovers a letter. */

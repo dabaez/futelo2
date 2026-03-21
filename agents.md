@@ -148,9 +148,10 @@ module.exports = {
   GAMBLING_ERRORS:            [ /* 10 Spanish humorous error messages */ ],
 
   // ── Letter mines ──
-  PICKAXE_COST:     30,   // coins to buy one pickaxe
-  PICKAXE_HITS:     10,   // swings granted per purchase
-  MINE_HIT_CHANCE:  0.4,  // probability a single swing finds a letter
+  PICKAXE_COST:       150, // base coins to buy one pickaxe (scaled by inventory)
+  PICKAXE_COST_SCALE: 2,   // extra coins per total inventory level (mirrors ROLL_COST_SCALE)
+  PICKAXE_HITS:       1000, // swings granted per purchase
+  MINE_HIT_CHANCE:    0.01, // probability a single swing finds a letter (~1 find per 100 swings)
 
   PROMPT_POOL: [ /* 20 Spanish questions */ ],
 };
@@ -292,8 +293,7 @@ Exported:
 
 Manages the pickaxe / letter-mine mini-game. All constants come from `config.js`.
 
-- `buyPickaxe(userId)` — deducts `PICKAXE_COST` coins, adds `PICKAXE_HITS` to the user's
-  `pickaxe_hits` counter. Multiple purchases stack. Returns `{ newCoins, pickaxeHits }`.
+- `buyPickaxe(userId)` — computes the scaled cost (`PICKAXE_COST + PICKAXE_COST_SCALE × Σinventory`), deducts it from the user's coins, and adds `PICKAXE_HITS` to their `pickaxe_hits` counter. Multiple purchases stack. Returns `{ newCoins, pickaxeHits, pickaxeCost }`.
 - `swing(userId)` — requires `pickaxe_hits > 0`. Decrements the counter by 1, then rolls
   `Math.random() < MINE_HIT_CHANCE` for a find. On a hit, picks a random letter from
   `'abcdefghijklmnopqrstuvwxyzñ'` and grants +1 inventory level (capped at `MAX_LETTER_LEVEL`).
@@ -590,11 +590,17 @@ The keyboard has **4 rows**:
 Row 0: Q W E R T Y U I O P
 Row 1:  A S D F G H J K L
 Row 2: ⌫  Z X C V B N M Ñ
-Row 3:    [  space bar  ]  ↵
+Row 3: [⇧]  [123]  [space]  [↵]
 ```
 
-Row 3 (space + enter) is intentionally separate from the letter rows so the
-space bar never visually merges with the letter keys.
+Row 3 (shift + mode-toggle + space + enter) keeps special keys on their own row.
+
+**Caps / shift toggle (`⇧`):** `MODE_CAPS = '⇧'` is a sentinel key defined alongside
+`MODE_TO_SYMBOLS` and `MODE_TO_LETTERS`. A boolean `caps` state is toggled on each
+`⇧` press. When `caps` is `true`, letter keys append their `.toUpperCase()` character
+to the draft. Inventory is checked against the **lowercase** key — `countDraftChars`
+already normalises via `.toLowerCase()`, so upper- and lower-case share the same pool.
+The `⇧` button is styled with `bg-tg-button` when active, `bg-gray-400` when inactive.
 
 For every letter key `L`:
 
@@ -611,6 +617,7 @@ the native focus behaviour stays clean on mobile.
 - Available key: `"a"` (just the lowercase letter)
 - No-stock key: `"a (no stock)"`
 - Locked key: `"a locked"`
+- Shift key: `"⇧"` (aria-label is the sentinel itself)
 - Special keys: `"⌫"`, `"␣"`, `"↵"`
 
 ### Tailwind Theme
@@ -748,10 +755,10 @@ Chat IDs for different tabs.
 | `src/__tests__/engine.test.js` | 32 | `letterRequirements` (incl. `_numbers`/`_symbols`), all 3 tiers, first-message bonus, coin floor, letter level cap, `shopRoll` (lootbox rarity), ñ support, transaction shape |
 | `src/__tests__/market.test.js` | 27 | `listLetter`, `buyListing`, `cancelListing`, `getOpenListings`, `getUserListings`, coin/letter cap invariants; BM factory isolation (`bmListLetter`, `bmBuyListing`, `bmCancelListing`, `getBmOpenListings`, `getBmUserListings`) |
 | `src/__tests__/blackMarket.test.js` | 16 | Heat decay, `addHeat`, `catchProbability`, `runCatchCheck`, listing expiry |
-| `src/__tests__/mining.test.js` | 18 | `buyPickaxe`, `swing`, hit/miss probability, coin deduction, inventory cap |
+| `src/__tests__/mining.test.js` | 18 | `buyPickaxe` (scaled cost), `swing`, hit/miss probability, inventory cap |
 | `src/__tests__/prompt.test.js` | 21 | `buyPrompt`, `getActivePrompt`, `submitReply` (all error paths + happy path), `castVote`, `closePrompt` (winner/runner-up distribution, tie-breaking, no-replies case) |
 | `src/__tests__/lottery.test.js` | 14 | `startLottery`, `placeBet` (invalid letter, no inventory, active-round guard), `closeLottery` (carry-over, winner coins+letters, `MAX_LETTER_LEVEL` cap), `getActiveLotteryRound` |
-| `src/__tests__/api.test.js` | 62 | All REST endpoints incl. P2P market + full BM flow + mining + lottery + prompt, end-to-end with temp SQLite DB |
+| `src/__tests__/api.test.js` | 59 | All REST endpoints incl. P2P market + full BM flow + mining (scaled cost) + lottery + prompt, end-to-end with temp SQLite DB |
 
 **Key patterns:**
 - `FUTELO_DATA_DIR` env override points the DB to a temp directory per test run.
@@ -765,11 +772,11 @@ Chat IDs for different tabs.
 
 - Config: `test:` block in `frontend/vite.config.js` (`environment: 'jsdom'`)
 - Run: `cd frontend && npm test`
-- **35 tests across 2 suites** (all passing)
+- **39 tests across 2 suites** (all passing)
 
 | File | Tests | What it covers |
 |---|---|---|
-| `src/__tests__/RestrictedKeyboard.test.jsx` | 20 | Rendering, badges (letters + number/symbol group pools), disabled states, pointer interactions |
+| `src/__tests__/RestrictedKeyboard.test.jsx` | 24 | Rendering, badges, disabled states, pointer interactions, caps/shift toggle |
 | `src/__tests__/MessageBubble.test.jsx` | 15 | Text, sender names, coin delta badges, tier labels, layout |
 
 **Key patterns:**
@@ -790,7 +797,8 @@ Chat IDs for different tabs.
 | Letter key stays disabled after shop roll | `ShopModal` calls `onPurchase(result)` → `updateUser({ newInventory })` in `App.jsx`. If the prop chain breaks, the keyboard won't re-render. |
 | `db.transaction` wraps async code | `better-sqlite3` is **synchronous only**. Never `await` inside a transaction. |
 | Tailwind classes not showing | Purge is based on `content: ['./src/**/*.{js,jsx}']` in `tailwind.config.js`. Dynamically constructed class strings (string interpolation) won't be detected — use full class names. |
-| Keyboard row layout | Space and Enter live on **row 3** (their own row). Do not move them onto the letter rows. The `ROWS` constant in `RestrictedKeyboard.jsx` is the single source of truth. |
+| Keyboard row layout | Shift (`⇧`), `123`, Space, and Enter live on **row 3**. Do not move them onto the letter rows. The `LETTER_ROWS` constant in `RestrictedKeyboard.jsx` is the single source of truth. |
+| Pickaxe cost not matching UI | `ShopModal` computes `pickaxeCost = cfg.PICKAXE_COST + cfg.PICKAXE_COST_SCALE × Σinventory` at render time. If `inventory` prop is stale the displayed cost will be wrong — ensure `App.jsx` passes the live `inventory` state. |
 | `ShopModal` shows wrong prices | It fetches `/api/config` on mount. If the fetch fails it falls back to the hardcoded defaults in `useState`. Always restart the backend after editing `config.js`. |
 | Prompt won't start | Only one prompt can be active at a time per room. Call `getActivePrompt(roomId)` first; if it returns non-null, the previous round must close before a new one starts. |
 | Lottery won't start | Only one round can be active at a time per room. Same pattern — check `getActiveLotteryRound(roomId)` first. |

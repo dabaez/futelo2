@@ -183,6 +183,7 @@ app.get('/api/config', (_req, res) => {
     GAMBLING_WIN_LETTERS:          config.GAMBLING_WIN_LETTERS,
     // ── Mining ──
     PICKAXE_COST:                  config.PICKAXE_COST,
+    PICKAXE_COST_SCALE:            config.PICKAXE_COST_SCALE,
     PICKAXE_HITS:                  config.PICKAXE_HITS,
     MINE_HIT_CHANCE:               config.MINE_HIT_CHANCE,
     // ── Black market heat (live values) ──

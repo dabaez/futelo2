@@ -77,7 +77,7 @@ export default function ShopModal({
     SELL_BASE_PRICE: 15, MARKET_MAX_PRICE: 500,
     PROMPT_BUY_COST: 200, PROMPT_WINNER_BONUS: 100,
     PROMPT_RUNNER_UP_BONUS: 30, PROMPT_DURATION_SEC: 180,
-    PICKAXE_COST: 30, PICKAXE_HITS: 10, MINE_HIT_CHANCE: 0.4,
+    PICKAXE_COST: 150, PICKAXE_COST_SCALE: 2, PICKAXE_HITS: 1000, MINE_HIT_CHANCE: 0.01,
   });
 
   // ── Roll tab state ───────────────────────────────────────────────────────
@@ -118,6 +118,9 @@ export default function ShopModal({
   // ── Prompt tab state ─────────────────────────────────────────────────────
   const [firingPrompt, setFiringPrompt] = useState(false);
   const [promptError, setPromptError]   = useState(null);
+
+  // Scaled pickaxe cost — mirrors the lootbox roll cost formula
+  const pickaxeCost = cfg.PICKAXE_COST + cfg.PICKAXE_COST_SCALE * Object.values(inventory || {}).reduce((s, v) => s + v, 0);
 
   // ── Fetch config on mount ────────────────────────────────────────────────
   useEffect(() => {
@@ -675,7 +678,7 @@ export default function ShopModal({
                   )}
                   <button
                     onClick={async () => {
-                      if (buyingPickaxe || coins < cfg.PICKAXE_COST) return;
+                      if (buyingPickaxe || coins < pickaxeCost) return;
                       setBuyingPickaxe(true);
                       setMineError(null);
                       try {
@@ -686,17 +689,17 @@ export default function ShopModal({
                         const data = await safeJson(r);
                         if (!r.ok) throw new Error(data?.error || 'Error al comprar el pico.');
                         setHitsLeft(data.pickaxeHits);
-                        onPurchase?.({ newCoins: data.newCoins });
+                        onPurchase?.({ newCoins: data.newCoins });
                       } catch (e) {
                         setMineError(e.message);
                       } finally {
                         setBuyingPickaxe(false);
                       }
                     }}
-                    disabled={buyingPickaxe || coins < cfg.PICKAXE_COST}
+                    disabled={buyingPickaxe || coins < pickaxeCost}
                     className="bg-tg-button text-tg-btn-text font-semibold rounded-xl py-3 active:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    {buyingPickaxe ? '…' : `Comprar pico — ${cfg.PICKAXE_COST} 🪙`}
+                    {buyingPickaxe ? '…' : `Comprar pico — ${pickaxeCost} 🪙`}
                   </button>
                   <p className="text-xs text-tg-hint text-center">Saldo actual: {coins} 🪙</p>
                 </>
@@ -784,7 +787,7 @@ export default function ShopModal({
                   {/* Buy more pickaxes inline */}
                   <button
                     onClick={async () => {
-                      if (buyingPickaxe || coins < cfg.PICKAXE_COST) return;
+                      if (buyingPickaxe || coins < pickaxeCost) return;
                       setBuyingPickaxe(true);
                       setMineError(null);
                       try {
@@ -802,10 +805,10 @@ export default function ShopModal({
                         setBuyingPickaxe(false);
                       }
                     }}
-                    disabled={buyingPickaxe || coins < cfg.PICKAXE_COST}
+                    disabled={buyingPickaxe || coins < pickaxeCost}
                     className="text-sm text-tg-hint border border-tg-bg-sec rounded-xl py-2.5 active:opacity-60 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    {buyingPickaxe ? '…' : `+${cfg.PICKAXE_HITS} golpes — ${cfg.PICKAXE_COST} 🪙`}
+                    {buyingPickaxe ? '…' : `+${cfg.PICKAXE_HITS} golpes — ${pickaxeCost} 🪙`}
                   </button>
                 </>
               )}

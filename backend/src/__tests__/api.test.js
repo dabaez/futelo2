@@ -538,28 +538,29 @@ describe('POST /api/mine/buy', () => {
     expect(res.body.error).toMatch(/insuficiente/i);
   });
 
-  test('deducts PICKAXE_COST and grants PICKAXE_HITS after seeding coins', async () => {
-    await seedCoins(app, GINA, 100);
+  test('deducts scaled cost and grants PICKAXE_HITS after seeding coins', async () => {
+    await seedCoins(app, GINA, 500);
     const meBefore = await request(app).get('/api/me').set(authHeader(GINA));
     const coinsBefore = meBefore.body.coins;
 
     const configRes = await request(app).get('/api/config');
-    const { PICKAXE_COST, PICKAXE_HITS } = configRes.body;
+    const { PICKAXE_HITS } = configRes.body;
 
     const res = await request(app)
       .post('/api/mine/buy')
       .set(authHeader(GINA));
 
     expect(res.status).toBe(200);
-    expect(res.body.newCoins).toBe(coinsBefore - PICKAXE_COST);
+    // Scaled cost is returned in the response; use it to verify the deduction
+    expect(res.body.newCoins).toBe(coinsBefore - res.body.pickaxeCost);
     expect(res.body.pickaxeHits).toBe(PICKAXE_HITS);
   });
 
   test('buying a second pickaxe stacks the hit counter', async () => {
     const configRes = await request(app).get('/api/config');
-    const { PICKAXE_COST, PICKAXE_HITS } = configRes.body;
+    const { PICKAXE_HITS } = configRes.body;
 
-    await seedCoins(app, GINA, PICKAXE_COST + 10);
+    await seedCoins(app, GINA, 500);
 
     const res = await request(app)
       .post('/api/mine/buy')
@@ -574,21 +575,27 @@ describe('POST /api/mine/buy', () => {
 
 describe('POST /api/mine/swing', () => {
   let app;
-  let hitsPerPickaxe;
 
   beforeAll(async () => {
     app = getApp();
     await authAs(app, HANK);
-    // Seed coins and buy exactly one pickaxe
-    await seedCoins(app, HANK, 100);
-    const configRes = await request(app).get('/api/config');
-    hitsPerPickaxe = configRes.body.PICKAXE_HITS;
+    // Seed enough coins for a scaled-cost pickaxe, then buy one
+    await seedCoins(app, HANK, 500);
     await request(app).post('/api/mine/buy').set(authHeader(HANK));
   });
 
   test('returns 401 without authentication', async () => {
     const res = await request(app).post('/api/mine/swing');
     expect(res.status).toBe(401);
+  });
+
+  test('returns 400 when user has no pickaxe hits', async () => {
+    // A brand-new user who has never bought a pickaxe
+    const NOHITS = 'dev:9998:nohits:NoHits';
+    await authAs(app, NOHITS);
+    const res = await request(app).post('/api/mine/swing').set(authHeader(NOHITS));
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/golpes/i);
   });
 
   test('returns 200 with found (boolean), letter, newInventory, and hitsLeft', async () => {
@@ -614,20 +621,6 @@ describe('POST /api/mine/swing', () => {
     const after  = await request(app).post('/api/mine/swing').set(authHeader(HANK));
 
     expect(after.body.hitsLeft).toBe(before.body.hitsLeft - 1);
-  });
-
-  test('returns 400 when all hits are exhausted', async () => {
-    // Drain every remaining hit
-    let hitsLeft = (await request(app).post('/api/mine/swing').set(authHeader(HANK))).body.hitsLeft;
-    while (hitsLeft > 0) {
-      const r = await request(app).post('/api/mine/swing').set(authHeader(HANK));
-      hitsLeft = r.body.hitsLeft;
-    }
-
-    // Next swing should fail
-    const res = await request(app).post('/api/mine/swing').set(authHeader(HANK));
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/golpes/i);
   });
 });
 

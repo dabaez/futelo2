@@ -14,6 +14,7 @@
 const { db, stmts, requireUser, requireRoomMember } = require('../db/database');
 const {
   PICKAXE_COST,
+  PICKAXE_COST_SCALE,
   PICKAXE_HITS,
   MINE_HIT_CHANCE,
   MAX_LETTER_LEVEL,
@@ -43,14 +44,18 @@ function buyPickaxe(userId, roomId = 0) {
   requireUser(userId);
   const rm = requireRoomMember(userId, roomId);
 
-  if (rm.coins < PICKAXE_COST) {
+  const inv         = JSON.parse(rm.inventory_json || '{}');
+  const totalLevels = Object.values(inv).reduce((s, v) => s + v, 0);
+  const pickaxeCost = PICKAXE_COST + PICKAXE_COST_SCALE * totalLevels;
+
+  if (rm.coins < pickaxeCost) {
     throw new Error(
-      `Monedas insuficientes. Un pico cuesta ${PICKAXE_COST} 🪙.`
+      `Monedas insuficientes. Un pico cuesta ${pickaxeCost} 🪙.`
     );
   }
 
   db.transaction(() => {
-    stmts.updateRoomCoins.run(-PICKAXE_COST, roomId, userId);
+    stmts.updateRoomCoins.run(-pickaxeCost, roomId, userId);
     stmts.addRoomPickaxeHits.run(PICKAXE_HITS, roomId, userId);
   })();
 
@@ -58,6 +63,7 @@ function buyPickaxe(userId, roomId = 0) {
   return {
     newCoins:    fresh.coins,
     pickaxeHits: fresh.pickaxe_hits,
+    pickaxeCost,
   };
 }
 
