@@ -22,6 +22,9 @@ const {
   PROMPT_REPLY_BONUS,
   PROMPT_BUY_COST,
   PROMPT_POOL,
+  MOVIE_POOL,
+  SERIES_POOL,
+  JUEGOS_POOL,
 } = require('../config');
 
 // Local aliases matching the old names used throughout this file
@@ -30,13 +33,23 @@ const RUNNER_UP_BONUS = PROMPT_RUNNER_UP_BONUS;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Build template-generated prompts from the media pools
+const TEMPLATE_PROMPTS = [
+  ...MOVIE_POOL.map((m) => `Describe la siguiente película en un futelo: ${m}`),
+  ...SERIES_POOL.map((s) => `Describe la siguiente serie en un futelo: ${s}`),
+  ...JUEGOS_POOL.map((g) => `Describe el siguiente juego en un futelo: ${g}`),
+];
+
+// Combined pool used by pickNextPrompt
+const ALL_PROMPTS = [...PROMPT_POOL, ...TEMPLATE_PROMPTS];
+
 /**
  * Pick a prompt that hasn't appeared recently (last 5 prompts are avoided).
  */
 function pickNextPrompt(roomId = 0) {
   const used   = db.prepare('SELECT text FROM prompts WHERE room_id = ? ORDER BY id DESC LIMIT 5').all(roomId).map((r) => r.text);
-  const pool   = PROMPT_POOL.filter((p) => !used.includes(p));
-  const source = pool.length > 0 ? pool : PROMPT_POOL;
+  const pool   = ALL_PROMPTS.filter((p) => !used.includes(p));
+  const source = pool.length > 0 ? pool : ALL_PROMPTS;
   return source[Math.floor(Math.random() * source.length)];
 }
 
