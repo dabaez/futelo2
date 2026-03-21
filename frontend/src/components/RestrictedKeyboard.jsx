@@ -5,12 +5,14 @@ import React, { useState, useCallback, useMemo } from 'react';
  * ──────────────────
  * A two-layout on-screen keyboard.
  *
- *  Letters mode (default)        Symbols mode (tap "123")
- *  ──────────────────────        ──────────────────────────
- *  Q W E R T Y U I O P          1 2 3 4 5 6 7 8 9 0
- *   A S D F G H J K L           ! ? . , : -
- *  ⌫ Z X C V B N M Ñ           ( ) @ # & *
- *  [123]  [space]  [↵]          [ABC]  [⌫]  [space]  [↵]
+ *  Letters mode (default)              Symbols mode (tap "123")
+ *  ──────────────────────────────        ──────────────────────────
+ *  Q W E R T Y U I O P                  1 2 3 4 5 6 7 8 9 0
+ *   A S D F G H J K L                  ! ? . , : -
+ *  ⌫ Z X C V B N M Ñ                  ( ) @ # & *
+ *  [⇧]  [123]  [space]  [↵]           [ABC]  [⌫]  [space]  [↵]
+ *
+ *  ⇧ toggles caps mode: letters are appended UPPERCASE while active.
  *
  * Props:
  *   draft         – string  (current message being composed)
@@ -31,12 +33,14 @@ const SYMBOL_ROW2 = ['(',')',  '@','#','&','*'];
 // Sentinel keys that toggle the layout – never appended to draft
 const MODE_TO_SYMBOLS = '123';
 const MODE_TO_LETTERS = 'ABC';
+// Sentinel key that toggles caps mode
+const MODE_CAPS = '⇧';
 
 const LETTER_ROWS = [
   ['q','w','e','r','t','y','u','i','o','p'],
   ['a','s','d','f','g','h','j','k','l'],
   ['⌫','z','x','c','v','b','n','m','ñ'],
-  [MODE_TO_SYMBOLS, ' ', '↵'],
+  [MODE_CAPS, MODE_TO_SYMBOLS, ' ', '↵'],
 ];
 
 const SYMBOL_ROWS = [
@@ -52,6 +56,7 @@ const SPECIAL_LABELS = {
   '↵':            '↵',
   [MODE_TO_SYMBOLS]: MODE_TO_SYMBOLS,
   [MODE_TO_LETTERS]: MODE_TO_LETTERS,
+  [MODE_CAPS]:       MODE_CAPS,
 };
 
 /**
@@ -82,19 +87,21 @@ export default function RestrictedKeyboard({
   disabled      = false,
 }) {
   const [mode, setMode]   = useState('letters'); // 'letters' | 'symbols'
+  const [caps, setCaps]   = useState(false);
   const lockedSet         = useMemo(() => new Set(lockedLetters), [lockedLetters]);
   const draftCounts       = useMemo(() => countDraftChars(draft), [draft]);
 
   const activeRows = mode === 'letters' ? LETTER_ROWS : SYMBOL_ROWS;
 
   const isMode = (key) => key === MODE_TO_SYMBOLS || key === MODE_TO_LETTERS;
+  const isCapsKey = (key) => key === MODE_CAPS;
 
   /**
    * Returns the reason a key is disabled, or null if it's usable.
-   * Mode-toggle and backspace/space/enter are never disabled via inventory.
+   * Mode-toggle, caps-toggle and backspace/space/enter are never disabled via inventory.
    */
   const getDisableReason = useCallback((key) => {
-    if (isMode(key) || key === '⌫' || key === ' ' || key === '↵') return null;
+    if (isMode(key) || isCapsKey(key) || key === '⌫' || key === ' ' || key === '↵') return null;
     if (key >= '0' && key <= '9') {
       if (lockedSet.has('_numbers')) return 'locked';
       return (draftCounts._numbers || 0) >= (inventory._numbers || 0) ? 'no-inventory' : null;
@@ -111,11 +118,12 @@ export default function RestrictedKeyboard({
     if (disabled) return;
     if (key === MODE_TO_SYMBOLS) { setMode('symbols'); return; }
     if (key === MODE_TO_LETTERS) { setMode('letters'); return; }
+    if (key === MODE_CAPS) { setCaps(c => !c); return; }
     if (key === '⌫') { onDraftChange(draft.slice(0, -1)); return; }
     if (key === '↵') { if (draft.trim().length > 0) onSend(); return; }
     if (getDisableReason(key)) return;
-    onDraftChange(draft + key);
-  }, [disabled, draft, onDraftChange, onSend, getDisableReason]);
+    onDraftChange(draft + (caps ? key.toUpperCase() : key));
+  }, [disabled, caps, draft, onDraftChange, onSend, getDisableReason]);
 
   return (
     <div
@@ -127,6 +135,7 @@ export default function RestrictedKeyboard({
           {row.map((key) => {
             const isSpecial   = key in SPECIAL_LABELS;
             const isModeKey   = isMode(key);
+            const isCapsToggle = isCapsKey(key);
             const isBackspace = key === '⌫';
             const isSend      = key === '↵';
             const isSpace     = key === ' ';
@@ -155,7 +164,7 @@ export default function RestrictedKeyboard({
             `;
 
             // Size
-            if (isModeKey || isBackspace) {
+            if (isCapsToggle || isModeKey || isBackspace) {
               cls += ' w-10 h-11 text-xs';
             } else if (isSend) {
               cls += ' w-10 h-11 text-sm';
@@ -172,6 +181,10 @@ export default function RestrictedKeyboard({
               cls += ` ${draft.trim().length > 0
                 ? 'bg-tg-button text-tg-btn-text'
                 : 'bg-gray-300 text-gray-500'}`;
+            } else if (isCapsToggle) {
+              cls += caps
+                ? ' bg-tg-button text-tg-btn-text'
+                : ' bg-gray-400 text-white';
             } else if (isModeKey) {
               cls += ' bg-gray-400 text-white';
             } else if (isLocked) {
@@ -184,7 +197,7 @@ export default function RestrictedKeyboard({
               cls += ' bg-white text-gray-900 shadow-sm';
             }
 
-            const ariaLabel = isModeKey  ? key
+            const ariaLabel = (isModeKey || isCapsToggle) ? key
               : isLocked  ? `${key} locked`
               : noStock   ? `${key} (no stock)`
               : (SPECIAL_LABELS[key] ?? key);
@@ -193,7 +206,7 @@ export default function RestrictedKeyboard({
               <button
                 key={key}
                 type="button"
-                disabled={disabled || (!isModeKey && !isSpecial && (noStock || isLocked))}
+                disabled={disabled || (!isModeKey && !isCapsToggle && !isSpecial && (noStock || isLocked))}
                 onPointerDown={(e) => {
                   e.preventDefault();
                   handleKey(key);

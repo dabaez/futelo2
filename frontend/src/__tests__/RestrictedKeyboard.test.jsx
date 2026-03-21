@@ -331,4 +331,75 @@ describe('RestrictedKeyboard', () => {
     fireEvent.pointerDown(qBtn);
     expect(onDraftChange).toHaveBeenCalledWith('hola?');
   });
+
+  // ── Caps / shift toggle ─────────────────────────────────────────────────────
+  it('renders the shift key ⇧ in letters mode', () => {
+    render(
+      <RestrictedKeyboard
+        draft=""
+        onDraftChange={noop}
+        onSend={noop}
+        inventory={{}}
+        lockedLetters={[]}
+      />
+    );
+    expect(screen.getByRole('button', { name: '⇧' })).toBeDefined();
+  });
+
+  it('appends uppercase letter when caps is on', () => {
+    const onDraftChange = vi.fn();
+    render(
+      <RestrictedKeyboard
+        draft=""
+        onDraftChange={onDraftChange}
+        onSend={noop}
+        inventory={{ h: 2 }}
+        lockedLetters={[]}
+      />
+    );
+    // Enable caps
+    fireEvent.pointerDown(screen.getByRole('button', { name: '⇧' }));
+    // Press 'h' – should append 'H'
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'h' }));
+    expect(onDraftChange).toHaveBeenCalledWith('H');
+  });
+
+  it('appends lowercase letter when caps is toggled back off', () => {
+    const onDraftChange = vi.fn();
+    render(
+      <RestrictedKeyboard
+        draft=""
+        onDraftChange={onDraftChange}
+        onSend={noop}
+        inventory={{ h: 2 }}
+        lockedLetters={[]}
+      />
+    );
+    const shiftBtn = screen.getByRole('button', { name: '⇧' });
+    // Toggle on then off
+    fireEvent.pointerDown(shiftBtn);
+    fireEvent.pointerDown(shiftBtn);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'h' }));
+    expect(onDraftChange).toHaveBeenCalledWith('h');
+  });
+
+  it('uppercase letters still consume the same inventory pool as lowercase', () => {
+    // draft already has one 'a' (lowercase); inventory is 1
+    // caps on → pressing 'a' should still be blocked (no-stock)
+    const onDraftChange = vi.fn();
+    render(
+      <RestrictedKeyboard
+        draft="a"
+        onDraftChange={onDraftChange}
+        onSend={noop}
+        inventory={{ a: 1 }}
+        lockedLetters={[]}
+      />
+    );
+    fireEvent.pointerDown(screen.getByRole('button', { name: '⇧' }));
+    // 'a' key is now no-stock (draft used up the 1 allowance)
+    const aBtn = screen.getByRole('button', { name: 'a (no stock)' });
+    fireEvent.pointerDown(aBtn);
+    expect(onDraftChange).not.toHaveBeenCalled();
+  });
 });
