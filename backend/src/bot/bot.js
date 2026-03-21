@@ -41,11 +41,14 @@ async function checkDeletePermission(chatId) {
     // bot.botInfo is populated after bot.init() / bot.start(); fall back to getMe() if needed
     const botId  = bot.botInfo?.id ?? (await bot.api.getMe()).id;
     const member = await bot.api.getChatMember(chatId, botId);
-    const ok     = member.status === 'administrator' && member.can_delete_messages === true;
+    // For administrators, can_delete_messages is either true or undefined (full rights).
+    // It is only explicitly false when the admin was granted restricted permissions.
+    const ok = member.status === 'administrator' && member.can_delete_messages !== false;
     canDeleteCache.set(chatId, ok);
     return ok;
-  } catch {
-    canDeleteCache.set(chatId, false);
+  } catch (err) {
+    // Don't cache on error — transient API failures shouldn't permanently block the feature
+    console.warn(`[Bot] checkDeletePermission(${chatId}): ${err.message}`);
     return false;
   }
 }
