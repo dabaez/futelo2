@@ -109,11 +109,11 @@ export default function ShopModal({
 
   // ── Config from server ───────────────────────────────────────────────────
   const [cfg, setCfg] = useState({
-    ROLL_COST: 50, ROLL_COST_SCALE: 2, ROLL_COUNT: 3,
+    ROLL_COST: 100, ROLL_COST_SCALE: 1, ROLL_COUNT: 3,
     SELL_BASE_PRICE: 15, MARKET_MAX_PRICE: 500,
     PROMPT_BUY_COST: 200, PROMPT_WINNER_BONUS: 100,
     PROMPT_RUNNER_UP_BONUS: 30, PROMPT_DURATION_SEC: 180,
-    PICKAXE_COST: 150, PICKAXE_COST_SCALE: 2, PICKAXE_HITS: 1000, MINE_HIT_CHANCE: 0.01,
+    PICKAXE_COST: 150, PICKAXE_COST_SCALE: 1, PICKAXE_HITS: 1000, MINE_HIT_CHANCE: 0.01,
   });
 
   // ── Roll tab state ───────────────────────────────────────────────────────

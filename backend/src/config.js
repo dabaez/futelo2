@@ -29,13 +29,13 @@ module.exports = {
 
   // ── Letter shop (roll) ──────────────────────────────────────────────────────
   /** Base coin cost of a letter roll (before scaling). */
-  ROLL_COST: 50,
+  ROLL_COST: 100,
   /**
    * Extra coins added to the roll cost per total letter level the player owns.
    * cost = ROLL_COST + ROLL_COST_SCALE × sum(inventory values)
    * Makes rolling progressively more expensive as players near the cap.
    */
-  ROLL_COST_SCALE: 2,
+  ROLL_COST_SCALE: 1,
   /**
    * Lootbox rarity tiers for the letter roll shop.
    * Each tier defines how many letter levels are awarded and its relative
@@ -145,7 +145,7 @@ module.exports = {
   /** Base coin cost of one pickaxe (before inventory scaling). */
   PICKAXE_COST: 150,
   /** Extra coins added to pickaxe cost per total inventory level (mirrors ROLL_COST_SCALE). */
-  PICKAXE_COST_SCALE: 2,
+  PICKAXE_COST_SCALE: 1,
   /** Number of swings a single pickaxe purchase provides. */
   PICKAXE_HITS: 1000,
   /** Probability (0–1) that a single swing uncovers a letter. */

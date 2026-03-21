@@ -443,10 +443,10 @@ describe('shopRoll', () => {
   });
 
   test('updates inventory with the rolled letters', () => {
-    const user = makeUser({ coins: 100, inventory_json: JSON.stringify({ a: 1 }) });
+    const user = makeUser({ coins: 200, inventory_json: JSON.stringify({ a: 1 }) });
     requireUser.mockReturnValue(user);
     requireRoomMember.mockReturnValue(user);
-    stmts.getRoomMember.get.mockReturnValue({ ...user, coins: 50 });
+    stmts.getRoomMember.get.mockReturnValue({ ...user, coins: 100 });
 
     const result = shopRoll(1);
     for (const letter of result.newLetters) {
