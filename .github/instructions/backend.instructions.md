@@ -143,7 +143,7 @@ const { db, stmts, upsertUser, requireUser, upsertRoom, requireRoom } = require(
 | `getOpenMarketListings` | All `open` listings for a `room_id`, with seller names |
 | `getActiveSellerListing` | Open listing for `(sellerId, letter, roomId)` — duplicate detection |
 | `resolveMarketListing` | Update `status`, `buyer_id`, `resolved_at` by `id` |
-| `getUserMarketListings` | User's 20 most recent listings in a room (any status) |
+| `getUserMarketListings` | User's **open** listings in a room (no LIMIT; open-only filter) |
 
 **Black market (mirror set, separate table):**
 
@@ -154,7 +154,7 @@ const { db, stmts, upsertUser, requireUser, upsertRoom, requireRoom } = require(
 | `getOpenBmListings` | Open BM listings for a `room_id` with seller names |
 | `getAllOpenBmListingsGlobal` | **All** open BM listings regardless of room |
 | `resolveBmListing` | Resolves a BM listing (sold / cancelled) |
-| `getUserBmListings` | User's 20 most recent BM listings in a room |
+| `getUserBmListings` | User's **open** BM listings in a room (no LIMIT; open-only filter) |
 
 **Mining:**
 
@@ -226,12 +226,12 @@ All writes in `db.transaction()`. No socket broadcast (solo activity).
 | `buyListing(buyerId, listingId)` | regular | Deducts price from buyer; credits `floor(price*(1−commission))` to seller |
 | `cancelListing(sellerId, listingId)` | regular | Returns escrowed letter, cancels listing |
 | `getOpenListings(roomId)` | regular | Open listings for the room with seller names |
-| `getUserListings(userId, roomId)` | regular | User's 20 most recent listings (any status) |
+| `getUserListings(userId, roomId)` | regular | User's open listings only (for cancel management) |
 | `bmListLetter(sellerId, letter, price, roomId)` | black | Same as `listLetter` on BM table |
 | `bmBuyListing(buyerId, listingId)` | black | Same as `buyListing` on BM table |
 | `bmCancelListing(sellerId, listingId)` | black | Same as `cancelListing` on BM table |
 | `getBmOpenListings(roomId)` | black | Open BM listings with seller names |
-| `getBmUserListings(userId, roomId)` | black | User's 20 most recent BM listings |
+| `getBmUserListings(userId, roomId)` | black | User's open BM listings only |
 
 All write operations in `db.transaction()`.
 
@@ -304,12 +304,12 @@ All endpoints in `server.js`. Auth sent as `x-init-data` header or `body.initDat
 | POST | `/api/shop/prompt` | initData | Buy and fire a community prompt |
 | GET | `/api/prompt/active?roomId=R` | none | Active prompt + replies |
 | GET | `/api/market/listings?roomId=R` | none | Open P2P listings |
-| GET | `/api/market/my-listings?roomId=R` | initData | Caller's 20 most recent listings |
+| GET | `/api/market/my-listings?roomId=R` | initData | Caller's **open** listings only (cancel panel) |
 | POST | `/api/market/list` | initData | Create a listing `{ letter, price }` |
 | POST | `/api/market/buy/:id` | initData | Buy a listing |
 | POST | `/api/market/cancel/:id` | initData | Cancel own listing |
 | GET | `/api/bm/listings?roomId=R` | none | Open BM listings |
-| GET | `/api/bm/my-listings?roomId=R` | initData | Caller's 20 most recent BM listings |
+| GET | `/api/bm/my-listings?roomId=R` | initData | Caller's **open** BM listings only (cancel panel) |
 | POST | `/api/bm/list` | initData | Create a BM listing |
 | POST | `/api/bm/buy/:id` | initData | Buy a BM listing (no commission) |
 | POST | `/api/bm/cancel/:id` | initData | Cancel own BM listing |
@@ -335,7 +335,7 @@ All endpoints in `server.js`. Auth sent as `x-init-data` header or `body.initDat
 | `send_message` | `{ text }` | Engine validates → `new_message` broadcast to room |
 | `submit_prompt_reply` | `{ promptId, text }` | Adds reply → `new_prompt_reply` broadcast |
 | `vote_reply` | `{ replyId }` | Records vote → `vote_update` broadcast |
-| `beg` | — | `new_beg` broadcast if user is broke |
+| `beg` | — | Calls `broadcastSystemMessage` with JSON `{type:"beg",userId,username,firstName}` so the card is visible to all users, including those offline |
 
 **Server → Client (broadcast to `room:CHAT_ID`):**
 
@@ -356,7 +356,6 @@ All endpoints in `server.js`. Auth sent as `x-init-data` header or `body.initDat
 | `new_lottery` | Round object |
 | `lottery_bet_placed` | `{ roundId, userId, username, firstName, letter }` |
 | `lottery_closed` | `{ roundId, secretLetter, jackpot, winners, carryOver }` |
-| `new_beg` | `{ userId, username, firstName }` |
 
 **Server → Client (targeted to `user:USER_ID`):**
 
@@ -375,7 +374,7 @@ All endpoints in `server.js`. Auth sent as `x-init-data` header or `body.initDat
 
 - Config: `backend/jest.config.js` (`testEnvironment: 'node'`, `maxWorkers: 1`)
 - Run: `cd backend && npm test`
-- **211 tests across 8 suites** (all passing)
+- **213 tests across 8 suites** (all passing)
 
 | File | Tests | What it covers |
 |---|---|---|
@@ -386,7 +385,7 @@ All endpoints in `server.js`. Auth sent as `x-init-data` header or `body.initDat
 | `src/__tests__/mining.test.js` | 18 | `buyPickaxe` (scaled cost), `swing`, all-capped coin fallback |
 | `src/__tests__/prompt.test.js` | 22 | `buyPrompt`, `submitReply` (incl. username sourced from users table), `castVote`, `closePrompt` |
 | `src/__tests__/lottery.test.js` | 14 | `startLottery`, `placeBet`, `closeLottery`, carry-over |
-| `src/__tests__/api.test.js` | 62 | All REST endpoints end-to-end with temp SQLite DB |
+| `src/__tests__/api.test.js` | 64 | All REST endpoints end-to-end with temp SQLite DB; `my-listings` open-only regression |
 
 **Key patterns:**
 - `FUTELO_DATA_DIR` env override — temp directory per test run.

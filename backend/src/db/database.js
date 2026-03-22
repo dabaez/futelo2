@@ -437,7 +437,7 @@ const stmts = {
     'UPDATE market_listings SET status = ?, buyer_id = ?, resolved_at = ? WHERE id = ?'
   ),
   getUserMarketListings: db.prepare(
-    "SELECT * FROM market_listings WHERE seller_id = ? AND room_id = ? ORDER BY listed_at DESC LIMIT 20"
+    "SELECT * FROM market_listings WHERE seller_id = ? AND room_id = ? AND status = 'open' ORDER BY listed_at DESC"
   ),
 
   // ── Black market listings ──────────────────────────────────────────────────
@@ -457,7 +457,7 @@ const stmts = {
     'UPDATE black_market_listings SET status = ?, buyer_id = ?, resolved_at = ? WHERE id = ?'
   ),
   getUserBmListings: db.prepare(
-    "SELECT * FROM black_market_listings WHERE seller_id = ? AND room_id = ? ORDER BY listed_at DESC LIMIT 20"
+    "SELECT * FROM black_market_listings WHERE seller_id = ? AND room_id = ? AND status = 'open' ORDER BY listed_at DESC"
   ),
   // Full rows (no JOIN) used by the heat engine's catch check loop — scoped to room
   getAllOpenBmListings: db.prepare(

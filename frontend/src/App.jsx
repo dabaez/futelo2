@@ -184,20 +184,6 @@ export default function App() {
     socket.on('new_prompt_reply',  onNewPromptReply);
     socket.on('vote_update',       onVoteUpdate);
     socket.on('prompt_closed',     onPromptClosed);
-
-    // ── Beg events ───────────────────────────────────────────────
-    const onNewBeg = ({ userId: beggarId, firstName, username }) => {
-      if (beggarId === user?.id) return;
-      const name = firstName || username || 'Alguien';
-      showToast(`🙏 ${name} necesita monedas`, 'info', {
-        duration: 8000,
-        action: {
-          label: 'Dar 10 🪙',
-          fn: () => socket.emit('give_coins', { targetUserId: beggarId }),
-        },
-      });
-    };
-    socket.on('new_beg', onNewBeg);
     socket.on('prompt_error',      onPromptError);
 
     // ── Lottery events ──────────────────────────────────────────
@@ -246,7 +232,6 @@ export default function App() {
       socket.off('new_prompt_reply',  onNewPromptReply);
       socket.off('vote_update',       onVoteUpdate);
       socket.off('prompt_closed',     onPromptClosed);
-      socket.off('new_beg',           onNewBeg);
       socket.off('new_lottery',        onNewLottery);
       socket.off('lottery_bet_placed', onLotteryBetPlaced);
       socket.off('lottery_closed',     onLotteryClosed);

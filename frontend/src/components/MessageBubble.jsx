@@ -12,6 +12,11 @@ import React from 'react';
  *   isOwn    – boolean
  */
 
+const MISO_REPLACEMENT = 'Ⓜ️ℹ️🆘🅾️🆙';
+function replaceMiso(text) {
+  return text.replace(/miso\s*soup/gi, MISO_REPLACEMENT);
+}
+
 const TIER_META = {
   1: { label: null,                  color: 'text-emerald-400' },
   2: { label: '⚠ Aviso de spam',      color: 'text-yellow-400'  },
@@ -39,13 +44,38 @@ function formatTime(unixSec) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-export default function MessageBubble({ message, isOwn }) {
-  // System messages (userId === 0) render as a centred info pill
+export default function MessageBubble({ message, isOwn, socket }) {
+  // System messages (userId === 0): check for structured beg payload first
   if (message.userId === 0) {
+    let parsed = null;
+    try { parsed = JSON.parse(message.text); } catch { /* plain system message */ }
+
+    if (parsed?.type === 'beg') {
+      const name = parsed.firstName || parsed.username || 'Alguien';
+      return (
+        <div className="flex justify-center px-4 py-1 animate-slide-up">
+          <div className="flex items-center gap-2 bg-amber-500/15 border border-amber-500/30 rounded-2xl px-3 py-2 max-w-[90%]">
+            <span className="text-base">🙏</span>
+            <span className="text-xs text-amber-300 flex-1">
+              <span className="font-semibold">{name}</span> necesita monedas
+              <span className="ml-1 opacity-50">{formatTime(message.createdAt)}</span>
+            </span>
+            <button
+              className="bg-amber-500 text-white text-xs font-semibold rounded-xl px-3 py-1 active:opacity-70 shrink-0"
+              onClick={() => socket?.emit('give_coins', { targetUserId: parsed.userId })}
+            >
+              Dar 10 🪙
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Plain system message pill
     return (
       <div className="flex justify-center px-4 py-1 animate-slide-up">
         <span className="text-[11px] text-tg-hint bg-tg-bg-sec rounded-full px-3 py-1 text-center max-w-[90%]">
-          {message.text}
+          {replaceMiso(message.text)}
           <span className="ml-1 opacity-50">{formatTime(message.createdAt)}</span>
         </span>
       </div>
@@ -84,7 +114,7 @@ export default function MessageBubble({ message, isOwn }) {
               : 'bg-tg-bg-sec text-tg-text rounded-tl-sm'}
           `}
         >
-          <span className="whitespace-pre-wrap break-words">{message.text}</span>
+          <span className="whitespace-pre-wrap break-words">{replaceMiso(message.text)}</span>
 
           {/* Timestamp tail */}
           <span className={`ml-2 text-[10px] align-bottom select-none ${isOwn ? 'text-blue-200' : 'text-tg-hint'}`}>

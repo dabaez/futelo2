@@ -311,7 +311,7 @@ app.get('/api/market/listings', (req, res) => {
   }
 });
 
-// GET /api/market/my-listings – caller's own listings (any status)
+// GET /api/market/my-listings – caller's own open listings (for cancel management)
 app.get('/api/market/my-listings', authMiddleware, (req, res) => {
   try {
     res.json(getUserListings(req.tgUser.id, req.chatId));
@@ -675,12 +675,11 @@ io.on('connection', (socket) => {
     if (now < cooldownUntil) return; // silently rate-limit
     begCooldowns.set(userId, now + BEG_COOLDOWN_SEC * 1000);
     const user = requireUser(userId);
-    // Broadcast to everyone else in the same room
-    socket.to(`room:${roomId}`).emit('new_beg', {
-      userId,
-      username:  user.username,
-      firstName: user.first_name,
-    });
+    // Persist + broadcast as a real message so late joiners can also see it
+    broadcastSystemMessage(
+      JSON.stringify({ type: 'beg', userId, username: user.username, firstName: user.first_name }),
+      roomId
+    );
   });
 
   // ── Event: give_coins ─────────────────────────────────────────────

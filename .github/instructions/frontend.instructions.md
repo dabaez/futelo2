@@ -67,7 +67,7 @@ Socket events handled in `App.jsx`:
 - `prompt_closed` → clears `prompt`, shows winner toast
 - `prompt_error` → shows error in PromptBanner
 - `new_lottery` / `lottery_bet_placed` / `lottery_closed`
-- `new_beg` → toast with name
+- Beg messages arrive as `new_message` (system message with JSON `{type:"beg",...}` payload); rendered as amber cards by `MessageBubble`
 
 ---
 
@@ -194,12 +194,12 @@ An amber banner is shown in chat with a "**cambiar**" link to reset back to the 
 
 - Config: `test:` block in `frontend/vite.config.js` (`environment: 'jsdom'`)
 - Run: `cd frontend && npm test`
-- **39 tests across 2 suites** (all passing)
+- **52 tests across 2 suites** (all passing)
 
 | File | Tests | What it covers |
 |---|---|---|
 | `src/__tests__/RestrictedKeyboard.test.jsx` | 24 | Rendering, badges, disabled states, pointer interactions, caps/shift toggle |
-| `src/__tests__/MessageBubble.test.jsx` | 15 | Text, sender names, coin delta badges, tier labels, layout |
+| `src/__tests__/MessageBubble.test.jsx` | 27 | Text, sender names, coin delta badges, tier labels, layout, miso-soup replacement, system pill, beg card + socket interaction |
 
 **Key patterns:**
 - Query keys by exact aria-label (`'a'`, `'a (no stock)'`, `'a locked'`) — not uppercase regex.

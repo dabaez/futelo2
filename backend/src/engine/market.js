@@ -11,7 +11,7 @@
  *   buyListing(buyerId, listingId)        → { listingId, letter, price, sellerId, newInventory, newCoins }
  *   cancelListing(sellerId, listingId)    → { listingId, letter, newInventory }
  *   getOpenListings()                     → [...listings with seller names]
- *   getUserListings(userId)               → last 20 listings (any status)
+ *   getUserListings(userId)               → all open listings for this user
  *
  * Black market exports (same signatures, separate DB table):
  *   bmListLetter / bmBuyListing / bmCancelListing / getBmOpenListings / getBmUserListings

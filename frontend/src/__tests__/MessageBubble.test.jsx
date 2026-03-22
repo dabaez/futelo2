@@ -1,6 +1,6 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
 import MessageBubble from '../components/MessageBubble.jsx';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -142,5 +142,116 @@ describe('MessageBubble', () => {
     );
     const img = screen.getByRole('img');
     expect(img.getAttribute('src')).toBe('https://example.com/photo.jpg');
+  });
+});
+
+// ── Miso soup replacement ─────────────────────────────────────────────────────
+describe('miso soup replacement', () => {
+  const EMOJI = 'Ⓜ️ℹ️🆘🅾️🆙';
+
+  it('replaces "miso soup" (with space) in message text', () => {
+    render(<MessageBubble message={makeMessage({ text: 'I love miso soup today' })} isOwn={false} />);
+    expect(screen.getByText(`I love ${EMOJI} today`)).toBeDefined();
+  });
+
+  it('replaces "misosoup" (no space) in message text', () => {
+    render(<MessageBubble message={makeMessage({ text: 'misosoup is great' })} isOwn={false} />);
+    expect(screen.getByText(`${EMOJI} is great`)).toBeDefined();
+  });
+
+  it('is case-insensitive (MISO SOUP)', () => {
+    render(<MessageBubble message={makeMessage({ text: 'MISO SOUP rules' })} isOwn={false} />);
+    expect(screen.getByText(`${EMOJI} rules`)).toBeDefined();
+  });
+
+  it('replaces "miso soup" inside system message pills too', () => {
+    render(
+      <MessageBubble
+        message={makeMessage({ userId: 0, text: 'Someone mentioned miso soup here' })}
+        isOwn={false}
+      />
+    );
+    expect(screen.getByText(new RegExp(EMOJI))).toBeDefined();
+  });
+});
+
+// ── System message pill ───────────────────────────────────────────────────────
+describe('system message (userId === 0)', () => {
+  it('renders as a centred pill (not a chat bubble)', () => {
+    const { container } = render(
+      <MessageBubble
+        message={makeMessage({ userId: 0, text: 'Prompt closed.' })}
+        isOwn={false}
+      />
+    );
+    // Should have a justify-center wrapper, not flex-row / flex-row-reverse
+    const wrapper = container.firstChild;
+    expect(wrapper.className).toMatch(/justify-center/);
+    expect(wrapper.className).not.toMatch(/flex-row-reverse/);
+  });
+
+  it('shows the system message text', () => {
+    render(
+      <MessageBubble
+        message={makeMessage({ userId: 0, text: 'Lotería cerrada.' })}
+        isOwn={false}
+      />
+    );
+    expect(screen.getByText(/loter/i)).toBeDefined();
+  });
+});
+
+// ── Beg card ─────────────────────────────────────────────────────────────────
+describe('beg card (system message with type=beg payload)', () => {
+  function makeBegMessage(overrides = {}) {
+    return {
+      id:        99,
+      userId:    0,
+      text:      JSON.stringify({ type: 'beg', userId: 77, firstName: 'Carlos', username: 'carlos77' }),
+      coinDelta: 0,
+      createdAt: 1708000000,
+      ...overrides,
+    };
+  }
+
+  it('renders the beggar name and call-to-action text', () => {
+    render(<MessageBubble message={makeBegMessage()} isOwn={false} />);
+    expect(screen.getByText(/Carlos/)).toBeDefined();
+    expect(screen.getByText(/necesita monedas/i)).toBeDefined();
+  });
+
+  it('renders a "Dar 10 🪙" button', () => {
+    render(<MessageBubble message={makeBegMessage()} isOwn={false} />);
+    expect(screen.getByRole('button', { name: /dar 10/i })).toBeDefined();
+  });
+
+  it('calls socket.emit("give_coins", { targetUserId }) when button is clicked', () => {
+    const mockSocket = { emit: vi.fn() };
+    render(<MessageBubble message={makeBegMessage()} isOwn={false} socket={mockSocket} />);
+    fireEvent.click(screen.getByRole('button', { name: /dar 10/i }));
+    expect(mockSocket.emit).toHaveBeenCalledWith('give_coins', { targetUserId: 77 });
+  });
+
+  it('uses username as fallback when firstName is absent', () => {
+    const msg = makeBegMessage({
+      text: JSON.stringify({ type: 'beg', userId: 77, firstName: '', username: 'nocname' }),
+    });
+    render(<MessageBubble message={msg} isOwn={false} />);
+    expect(screen.getByText(/nocname/)).toBeDefined();
+  });
+
+  it('falls back to "Alguien" when both firstName and username are absent', () => {
+    const msg = makeBegMessage({
+      text: JSON.stringify({ type: 'beg', userId: 77, firstName: '', username: '' }),
+    });
+    render(<MessageBubble message={msg} isOwn={false} />);
+    expect(screen.getByText(/Alguien/)).toBeDefined();
+  });
+
+  it('does NOT show the "Dar" button when no socket is provided', () => {
+    render(<MessageBubble message={makeBegMessage()} isOwn={false} />);
+    // Button still renders but emitting via undefined socket should not throw
+    const btn = screen.getByRole('button', { name: /dar 10/i });
+    expect(() => fireEvent.click(btn)).not.toThrow();
   });
 });

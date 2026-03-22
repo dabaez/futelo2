@@ -236,6 +236,10 @@ Un mini-juego de exploración individual:
 
 Después de cerrar prompts y rondas de lotería, el servidor publica un mensaje de sistema (`userId = 0`) visible para todos, incluidos los jugadores que estaban offline (los mensajes se persisten en la DB y se muestran en el feed como pills centradas).
 
+El mensaje de **pedir ayuda** ("🙏 Pedir ayuda" en la tienda cuando el jugador no tiene letras ni monedas) también se publica como mensaje de sistema persistente con un payload JSON `{type:"beg", ...}`. El feed lo renderiza como una tarjeta ámbar con un botón **Dar 10 🪙** — así todos los jugadores, incluyendo los que se conecten después, pueden donar.
+
+El mensaje de **pedir ayuda** ("🙏 Pedir ayuda" en la tienda cuando el jugador no tiene letras ni monedas) también se publica como mensaje de sistema persistente con un payload JSON `{type:"beg", ...}`. El feed lo renderiza como una tarjeta ámbar con un botón **Dar 10 🪙** — así todos los jugadores, incluyendo los que se conecten después, pueden donar.
+
 ### Notifications
 
 Las alertas por usuario (p.ej. "tu letra se vendió") se **persisten en la DB**. Si estás offline cuando tu listado se vende, el toast queda en cola y se muestra la próxima vez que te conectes.
@@ -245,8 +249,8 @@ Las alertas por usuario (p.ej. "tu letra se vendió") se **persisten en la DB**.
 ## Tests
 
 ```bash
-cd backend && npm test   # Jest + supertest  (210 tests, 8 suites)
-cd frontend && npm test  # Vitest + Testing Library  (40 tests, 2 suites)
+cd backend && npm test   # Jest + supertest  (213 tests, 8 suites)
+cd frontend && npm test  # Vitest + Testing Library  (52 tests, 2 suites)
 ```
 
 ### Backend test suites
@@ -260,4 +264,11 @@ cd frontend && npm test  # Vitest + Testing Library  (40 tests, 2 suites)
 | `mining.test.js` | 18 | `buyPickaxe` (scaled cost), `swing`, hit/miss probability, all-caps coin fallback |
 | `prompt.test.js` | 21 | `buyPrompt`, `submitReply`, `castVote`, `closePrompt` with all edge cases |
 | `lottery.test.js` | 14 | `startLottery`, `placeBet`, `closeLottery`, `getActiveLottery`, cap overflow coins |
-| `api.test.js` | 62 | All REST endpoints end-to-end with a real SQLite DB |
+| `api.test.js` | 64 | All REST endpoints end-to-end with a real SQLite DB; includes regression for `my-listings` open-only filter |
+
+### Frontend test suites
+
+| Suite | Tests | What it covers |
+|-------|-------|---------------|
+| `RestrictedKeyboard.test.jsx` | 25 | Rendering, badges, disabled states, pointer interactions, caps/shift toggle |
+| `MessageBubble.test.jsx` | 27 | Text, sender names, coin delta badges, tier labels, layout, miso-soup replacement, system pill, beg card + socket interaction |

@@ -390,6 +390,83 @@ describe('P2P market endpoints', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/market/my-listings – open-only filter
+// (Regression: previously returned last-20 of any status; sold/cancelled
+//  listings would crowd out open ones above the LIMIT 20 threshold.)
+// ─────────────────────────────────────────────────────────────────────────────
+const MEG  = 'dev:1013:meg:Meg';
+const NICK = 'dev:1014:nick:Nick';
+
+describe('GET /api/market/my-listings only returns open listings', () => {
+  let app;
+
+  beforeAll(async () => {
+    app = getApp();
+    await authAs(app, MEG);
+    await authAs(app, NICK);
+    // Give MEG coins and letters via shop rolls
+    await seedCoins(app, MEG, 600);
+    await seedCoins(app, NICK, 200);
+  });
+
+  test('sold listing no longer appears in my-listings', async () => {
+    // MEG rolls for letters
+    const roll1 = await request(app).post('/api/shop/roll').set(authHeader(MEG)).send();
+    const letter1 = (roll1.body.newLetters || [])[0];
+    expect(letter1).toBeTruthy();
+
+    // MEG lists the letter
+    const listRes = await request(app)
+      .post('/api/market/list')
+      .set(authHeader(MEG))
+      .send({ letter: letter1, price: 20 });
+    const soldId = listRes.body.listingId;
+    expect(typeof soldId).toBe('number');
+
+    // NICK buys it
+    await request(app)
+      .post(`/api/market/buy/${soldId}`)
+      .set(authHeader(NICK));
+
+    // MEG's my-listings should NOT contain the sold listing
+    const myRes = await request(app)
+      .get('/api/market/my-listings?roomId=-1001')
+      .set(authHeader(MEG));
+    expect(myRes.status).toBe(200);
+    const ids = myRes.body.map((l) => l.id);
+    expect(ids).not.toContain(soldId);
+    // All returned listings must be open
+    myRes.body.forEach((l) => expect(l.status).toBe('open'));
+  });
+
+  test('cancelled listing no longer appears in my-listings', async () => {
+    await seedCoins(app, MEG, 300);
+    const roll2 = await request(app).post('/api/shop/roll').set(authHeader(MEG)).send();
+    const letter2 = (roll2.body.newLetters || [])[0];
+    expect(letter2).toBeTruthy();
+
+    const listRes = await request(app)
+      .post('/api/market/list')
+      .set(authHeader(MEG))
+      .send({ letter: letter2, price: 25 });
+    const cancelId = listRes.body.listingId;
+
+    // MEG cancels it
+    await request(app)
+      .post(`/api/market/cancel/${cancelId}`)
+      .set(authHeader(MEG));
+
+    const myRes = await request(app)
+      .get('/api/market/my-listings?roomId=-1001')
+      .set(authHeader(MEG));
+    expect(myRes.status).toBe(200);
+    const ids = myRes.body.map((l) => l.id);
+    expect(ids).not.toContain(cancelId);
+    myRes.body.forEach((l) => expect(l.status).toBe('open'));
+  });
+});
+
 // ────────────────────────────────────────────────────────────────────────────
 // Black market endpoints (secret)
 // ────────────────────────────────────────────────────────────────────────────

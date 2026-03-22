@@ -77,6 +77,7 @@ export default function ChatFeed({ socket, myUserId, chatId = 0 }) {
           key={msg.id}
           message={msg}
           isOwn={msg.userId === myUserId}
+          socket={socket}
         />
       ))}
 
