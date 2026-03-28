@@ -124,17 +124,19 @@ Chat IDs for different tabs.
    (Socket.io events + HTTP requests sharing one DB connection) depends on
    WAL allowing concurrent reads during writes.
 
-5. **`DEV_MODE=true` must never reach production.** Auth bypass is intentional
+5. **Per-Room Economy & Progress.** From schema v19 onwards, `user_achievements`, `unlocked_emojis`, and `user_stats` are strictly scoped by a composite key `(user_id, room_id)`. Never fallback to a global lookup unless handling legacy `room_id = 0` during data migrations.
+
+6. **`DEV_MODE=true` must never reach production.** Auth bypass is intentional
    and total — any token in `dev:…` format is accepted without verification.
 
-6. **All game constants live in `backend/src/config.js`.** Do not hardcode
+7. **All game constants live in `backend/src/config.js`.** Do not hardcode
    values like `50`, `100`, or `200` in engine, database, or server files.
    Import from config. The frontend fetches them via `GET /api/config`.
 
-7. **Coins can never go below zero.** `updateCoins` and `updateUser` statements
+8. **Coins can never go below zero.** `updateCoins` and `updateUser` statements
    use `MAX(0, coins + ?)` at the SQL level. Do not change these to plain addition.
 
-8. **Market coin transfers are atomic.** `buyListing` wraps debit, credit,
+9. **Market coin transfers are atomic.** `buyListing` wraps debit, credit,
    inventory update, and listing resolution in a single `db.transaction()`.
 
 ---

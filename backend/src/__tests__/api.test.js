@@ -852,3 +852,15 @@ describe('Prompt endpoints', () => {
     expect(res.body.error).toMatch(/activo/i);
   });
 });
+
+describe('Config endpoint', () => {
+  let app;
+  beforeAll(() => { app = getApp(); });
+
+  test('GET /api/config exposes HINT_COST dynamically', async () => {
+    const res = await request(app).get('/api/config');
+    expect(res.status).toBe(200);
+    expect(res.body.HINT_COST).toBeDefined();
+    expect(typeof res.body.HINT_COST).toBe('number');
+  });
+});

@@ -175,7 +175,7 @@ function processMessage(userId, text, roomId = 0) {
   // ── Step 2b: Unauthorized character check ────────────────────────────────
   // Reject any character that isn't a letter, digit, SYMBOL_CHARS entry,
   // whitespace, or a forge emoji the user has actually unlocked.
-  const unlockedRows = stmts.getUnlockedEmojis.all(userId);
+  const unlockedRows = stmts.getUnlockedEmojis.all(userId, roomId);
   const unlockedEmojiKeys = new Set(unlockedRows.map((r) => r.emoji_key));
   const badChar = findUnauthorizedChar(text, unlockedEmojiKeys);
   if (badChar) {

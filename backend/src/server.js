@@ -225,6 +225,8 @@ app.get('/api/config', (_req, res) => {
     PICKAXE_COST_SCALE:            config.PICKAXE_COST_SCALE,
     PICKAXE_HITS:                  config.PICKAXE_HITS,
     MINE_HIT_CHANCE:               config.MINE_HIT_CHANCE,
+    // ── Emoji Forge ──
+    HINT_COST:                     config.HINT_COST,
     // ── Black market heat (live values) ──
     BM_HEAT_MAX:            config.BM_HEAT_MAX,
     BM_BASE_CATCH_PROB:     config.BM_BASE_CATCH_PROB,
@@ -295,6 +297,8 @@ app.get('/api/messages', (req, res) => {
       username:   r.username,
       firstName:  r.first_name,
       photoUrl:   r.photo_url,
+      likes:      r.likes,
+      dislikes:   r.dislikes,
     }))
   );
 });
@@ -626,7 +630,7 @@ app.post('/api/mine/swing', authMiddleware, (req, res) => {
 // GET /api/emoji/status – active merge + unlocked emojis for the caller
 app.get('/api/emoji/status', authMiddleware, (req, res) => {
   try {
-    res.json(getForgeStatus(req.tgUser.id));
+    res.json(getForgeStatus(req.tgUser.id, req.chatId));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -686,12 +690,69 @@ app.post('/api/notifications/enable', authMiddleware, (req, res) => {
 app.get('/api/achievements', authMiddleware, (req, res) => {
   try {
     const earned = new Set(
-      stmts.getEarnedAchievements.all(req.tgUser.id).map((r) => r.achievement_id)
+      stmts.getEarnedAchievements.all(req.tgUser.id, req.chatId).map((r) => r.achievement_id)
     );
     res.json(ACHIEVEMENTS.map((a) => ({ ...a, earned: earned.has(a.id) })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ── REST: reactions ─────────────────────────────────────────────────────────
+// GET  /api/reactions/my?roomId=R  – caller's reactions for a room (map: msgId → 'like'|'dislike')
+// POST /api/reactions/:messageId   – add a reaction (one-time, permanent)
+
+app.get('/api/reactions/my', authMiddleware, (req, res) => {
+  const roomId = Number(req.query.roomId) || 0;
+  const rows   = stmts.getMyReactionsForRoom.all(req.tgUser.id, roomId);
+  const map    = {};
+  for (const r of rows) map[r.message_id] = r.reaction;
+  res.json(map);
+});
+
+app.post('/api/reactions/:messageId', authMiddleware, (req, res) => {
+  const messageId = Number(req.params.messageId);
+  const { reaction } = req.body;
+  const viewerId = req.tgUser.id;
+
+  if (!['like', 'dislike'].includes(reaction)) {
+    return res.status(400).json({ error: 'reaction debe ser "like" o "dislike"' });
+  }
+
+  const message = stmts.getMessageById.get(messageId);
+  if (!message) return res.status(404).json({ error: 'Mensaje no encontrado.' });
+  if (message.user_id === viewerId) {
+    return res.status(403).json({ error: 'No puedes reaccionar a tu propio mensaje.' });
+  }
+
+  const roomId   = message.room_id;
+  const authorId = message.user_id;
+
+  const current = stmts.getMessageReaction.get(messageId, viewerId);
+  if (current) {
+    return res.status(400).json({ error: 'Ya reaccionaste a este mensaje.' });
+  }
+
+  let likes, dislikes;
+
+  db.transaction(() => {
+    const { count } = stmts.countReactionType.get(messageId, reaction);
+    const newCount  = count + 1;
+    const coinDelta = reaction === 'like' ? newCount : -newCount;
+    stmts.insertMessageReaction.run(messageId, viewerId, reaction);
+    stmts.updateCoins.run(coinDelta, authorId);
+
+    const counts = stmts.countMessageReactions.get(messageId);
+    likes    = counts.likes;
+    dislikes = counts.dislikes;
+  })();
+
+  io.to(`room:${roomId}`).emit('reaction_update', { messageId, likes, dislikes });
+
+  const author = requireUser(authorId);
+  io.to(`user:${authorId}`).emit('user_update', { newCoins: author.coins });
+
+  res.json({ ok: true, likes, dislikes, action: 'added' });
 });
 
 // ── Socket.io ─────────────────────────────────────────────────────────────
@@ -839,6 +900,8 @@ function buildMessagePayload(user, text, result) {
     newLetters:  result.newLetters,
     lockedLetter:result.lockedLetter,
     createdAt:   Math.floor(Date.now() / 1000),
+    likes:       0,
+    dislikes:    0,
   };
 }
 

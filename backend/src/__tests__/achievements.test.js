@@ -198,7 +198,7 @@ describe('checkAchievements – roll event', () => {
 
     checkAchievements(1, -1001, 'roll', { rarity: 'común' });
 
-    expect(stmts.statLootbox.run).toHaveBeenCalledWith(1);
+    expect(stmts.statLootbox.run).toHaveBeenCalledWith(1, -1001);
   });
 
   test('increments consecutive_common_boxes for a common roll', () => {
@@ -206,7 +206,7 @@ describe('checkAchievements – roll event', () => {
 
     checkAchievements(1, -1001, 'roll', { rarity: 'común' });
 
-    expect(stmts.statLootboxCommon.run).toHaveBeenCalledWith(1);
+    expect(stmts.statLootboxCommon.run).toHaveBeenCalledWith(1, -1001);
     expect(stmts.statLootboxNotCommon.run).not.toHaveBeenCalled();
   });
 
@@ -215,7 +215,7 @@ describe('checkAchievements – roll event', () => {
 
     checkAchievements(1, -1001, 'roll', { rarity: 'raro' });
 
-    expect(stmts.statLootboxNotCommon.run).toHaveBeenCalledWith(1);
+    expect(stmts.statLootboxNotCommon.run).toHaveBeenCalledWith(1, -1001);
     expect(stmts.statLootboxCommon.run).not.toHaveBeenCalled();
   });
 
@@ -253,7 +253,7 @@ describe('checkAchievements – mine_swing event', () => {
 
     checkAchievements(1, -1001, 'mine_swing', { found: true });
 
-    expect(stmts.statMineFind.run).toHaveBeenCalledWith(1);
+    expect(stmts.statMineFind.run).toHaveBeenCalledWith(1, -1001);
     expect(stmts.statMineFail.run).not.toHaveBeenCalled();
   });
 
@@ -262,7 +262,7 @@ describe('checkAchievements – mine_swing event', () => {
 
     checkAchievements(1, -1001, 'mine_swing', { found: false });
 
-    expect(stmts.statMineFail.run).toHaveBeenCalledWith(1);
+    expect(stmts.statMineFail.run).toHaveBeenCalledWith(1, -1001);
     expect(stmts.statMineFind.run).not.toHaveBeenCalled();
   });
 
@@ -300,7 +300,7 @@ describe('checkAchievements – market events', () => {
 
     checkAchievements(1, -1001, 'market_buy', {});
 
-    expect(stmts.statMarketBuy.run).toHaveBeenCalledWith(1);
+    expect(stmts.statMarketBuy.run).toHaveBeenCalledWith(1, -1001);
   });
 
   test('awards market_buy on first purchase', () => {
@@ -316,7 +316,7 @@ describe('checkAchievements – market events', () => {
 
     checkAchievements(1, -1001, 'market_sell', {});
 
-    expect(stmts.statMarketSell.run).toHaveBeenCalledWith(1);
+    expect(stmts.statMarketSell.run).toHaveBeenCalledWith(1, -1001);
   });
 
   test('awards market_sell on first sale', () => {
@@ -361,8 +361,8 @@ describe('checkAchievements – lottery events', () => {
 
     checkAchievements(1, -1001, 'lottery_bet', { betsInRound: 1 });
 
-    expect(stmts.statLotteryParticipate.run).toHaveBeenCalledWith(1);
-    expect(stmts.statLotteryBet.run).toHaveBeenCalledWith(1);
+    expect(stmts.statLotteryParticipate.run).toHaveBeenCalledWith(1, -1001);
+    expect(stmts.statLotteryBet.run).toHaveBeenCalledWith(1, -1001);
   });
 
   test('lottery_bet does not increment participations on subsequent bets', () => {

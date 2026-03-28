@@ -248,9 +248,9 @@ Un taller de creación de emojis:
 - Si la combinación coincide con una receta conocida, el emoji queda **desbloqueado permanentemente** y usable en cualquier sala.
 - Si no hay receta, los niveles se devuelven (+1 por ingrediente, máx. `MAX_LETTER_LEVEL`).
 - **Completar al instante**: paga `ceil(segundos_restantes × 0.02) 🪙`.
-- **Pista**: compra una pista críptica por 20 🪙 sobre un emoji que aún no tienes.
+- **Pista**: compra una pista críptica sobre un emoji que aún no tienes.
 - Una vez desbloqueado, el emoji aparece en la barra rápida del teclado para insertarlo con un toque.
-- Solo una mezcla activa a la vez (global, no por sala).
+- Las mezclas activas, pistas compradas y emojis desbloqueados son **por sala (per-room)**.
 
 ### Achievements (Logros)
 
@@ -258,8 +258,9 @@ Sistema de logros que recompensa hitos del juego con monedas.
 
 - 50+ logros distribuidos en categorías: Mensajes, Teclado, Tienda, Mercado, Mina, Apuestas, Emojis, Community.
 - Se otorgan automáticamente cuando se cumple la condición (tras cada acción relevante).
+- **El progreso, estadísticas y logros son independientes por cada sala (per-room).**
 - El premio se acredita en la sala donde ocurrió el evento.
-- Los logros ya ganados no se repiten.
+- Los logros ya ganados no se repiten en la misma sala.
 - Ver el panel de logros desde el icono 🏅 en el header.
 
 ### Notifications

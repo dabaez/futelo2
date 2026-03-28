@@ -136,41 +136,41 @@ const EVENT_CHECKS = {
  */
 function checkAchievements(userId, roomId, event, data = {}) {
   // Ensure the user_stats row exists before any UPDATE statements fire
-  stmts.upsertUserStats.run(userId);
+  stmts.upsertUserStats.run(userId, roomId);
 
   // ── Update running counters based on event ─────────────────────────────────
   if (event === 'mine_swing') {
-    if (data.found) stmts.statMineFind.run(userId);
-    else            stmts.statMineFail.run(userId);
+    if (data.found) stmts.statMineFind.run(userId, roomId);
+    else            stmts.statMineFail.run(userId, roomId);
   } else if (event === 'roll') {
-    stmts.statLootbox.run(userId);
-    if (data.rarity === 'común') stmts.statLootboxCommon.run(userId);
-    else                         stmts.statLootboxNotCommon.run(userId);
+    stmts.statLootbox.run(userId, roomId);
+    if (data.rarity === 'común') stmts.statLootboxCommon.run(userId, roomId);
+    else                         stmts.statLootboxNotCommon.run(userId, roomId);
   } else if (event === 'prompt_lose') {
-    stmts.statPromptLoss.run(userId);
+    stmts.statPromptLoss.run(userId, roomId);
   } else if (event === 'market_buy') {
-    stmts.statMarketBuy.run(userId);
+    stmts.statMarketBuy.run(userId, roomId);
   } else if (event === 'market_sell') {
-    stmts.statMarketSell.run(userId);
+    stmts.statMarketSell.run(userId, roomId);
   } else if (event === 'lottery_bet') {
-    stmts.statLotteryBet.run(userId);
-    if (data.betsInRound === 1) stmts.statLotteryParticipate.run(userId);
-    stmts.statLotteryBetsInRound.run(data.betsInRound || 1, userId);
+    stmts.statLotteryBet.run(userId, roomId);
+    if (data.betsInRound === 1) stmts.statLotteryParticipate.run(userId, roomId);
+    stmts.statLotteryBetsInRound.run(data.betsInRound || 1, userId, roomId);
   } else if (event === 'lottery_win') {
-    stmts.statLotteryWin.run(userId);
+    stmts.statLotteryWin.run(userId, roomId);
   } else if (event === 'prompt_win') {
-    stmts.statPromptWin.run(userId);
+    stmts.statPromptWin.run(userId, roomId);
   } else if (event === 'prompt_vote_win') {
-    stmts.statPromptCorrectVote.run(userId);
+    stmts.statPromptCorrectVote.run(userId, roomId);
   }
 
   // ── Read current state ─────────────────────────────────────────────────────
-  const stats      = stmts.getUserStats.get(userId);
-  const earnedSet  = new Set(stmts.getEarnedAchievements.all(userId).map((r) => r.achievement_id));
+  const stats      = stmts.getUserStats.get(userId, roomId);
+  const earnedSet  = new Set(stmts.getEarnedAchievements.all(userId, roomId).map((r) => r.achievement_id));
   const rm         = stmts.getRoomMember.get(roomId, userId);
   const inv        = rm ? JSON.parse(rm.inventory_json || '{}') : {};
   const msgCnt     = stmts.getUserMessageCount.get(userId).cnt;
-  const emojiCount = stmts.getUnlockedEmojis.all(userId).length;
+  const emojiCount = stmts.getUnlockedEmojis.all(userId, roomId).length;
 
   const toCheck = EVENT_CHECKS[event] || [];
 
@@ -188,7 +188,7 @@ function checkAchievements(userId, roomId, event, data = {}) {
   // Award all in one transaction: record + coin grant
   db.transaction(() => {
     for (const ach of newlyEarned) {
-      stmts.insertUserAchievement.run(userId, ach.id);
+      stmts.insertUserAchievement.run(userId, roomId, ach.id);
       stmts.updateRoomCoins.run(ach.reward, roomId, userId);
     }
   })();
@@ -276,57 +276,51 @@ function _isMet(id, { inv, msgCnt, stats, data, emojiCount }) {
  *   prompt_win, prompt_lose_5
  */
 function backfillAchievements() {
-  // Prepare statements once, outside the per-user loop
-  const getUsers          = db.prepare('SELECT id FROM users WHERE id != 0');
-  const getFirstRoom      = db.prepare('SELECT room_id FROM room_members WHERE user_id = ? ORDER BY coins DESC LIMIT 1');
-  const getRoomInvs       = db.prepare('SELECT inventory_json FROM room_members WHERE user_id = ?');
+  // Prepare statements once, outside the per-user/room loop
+  const getUserRooms      = db.prepare('SELECT DISTINCT user_id, room_id FROM room_members WHERE room_id != 0');
   const misoCheck         = db.prepare("SELECT 1 FROM messages WHERE user_id = ? AND lower(text) LIKE '%miso soup%' LIMIT 1");
-  const mktBought         = db.prepare("SELECT 1 FROM market_listings WHERE buyer_id = ? AND status = 'sold' LIMIT 1");
-  const mktBoughtCnt      = db.prepare("SELECT COUNT(*) as cnt FROM market_listings WHERE buyer_id = ? AND status = 'sold'");
-  const mktSold           = db.prepare("SELECT 1 FROM market_listings WHERE seller_id = ? AND status = 'sold' LIMIT 1");
-  const mktSoldCnt        = db.prepare("SELECT COUNT(*) as cnt FROM market_listings WHERE seller_id = ? AND status = 'sold'");
-  const bmBought          = db.prepare("SELECT 1 FROM black_market_listings WHERE buyer_id = ? AND status = 'sold' LIMIT 1");
-  const bmSold            = db.prepare("SELECT 1 FROM black_market_listings WHERE seller_id = ? AND status = 'sold' LIMIT 1");
-  const lotWin            = db.prepare(`
-    SELECT 1 FROM lottery_bets lb
-    JOIN lottery_rounds lr ON lr.id = lb.round_id
-    WHERE lb.user_id = ? AND lb.letter = lr.secret_letter AND lr.status = 'closed'
-    LIMIT 1
-  `);
+  const mktBoughtCnt      = db.prepare("SELECT COUNT(*) as cnt FROM market_listings WHERE buyer_id = ? AND status = 'sold' AND room_id = ?");
+  const mktSoldCnt        = db.prepare("SELECT COUNT(*) as cnt FROM market_listings WHERE seller_id = ? AND status = 'sold' AND room_id = ?");
+  const bmBought          = db.prepare("SELECT 1 FROM black_market_listings WHERE buyer_id = ? AND status = 'sold' AND room_id = ? LIMIT 1");
+  const bmSold            = db.prepare("SELECT 1 FROM black_market_listings WHERE seller_id = ? AND status = 'sold' AND room_id = ? LIMIT 1");
   const lotWinCnt         = db.prepare(`
     SELECT COUNT(DISTINCT lb.round_id) as cnt FROM lottery_bets lb
     JOIN lottery_rounds lr ON lr.id = lb.round_id
-    WHERE lb.user_id = ? AND lb.letter = lr.secret_letter AND lr.status = 'closed'
+    WHERE lb.user_id = ? AND lb.letter = lr.secret_letter AND lr.status = 'closed' AND lr.room_id = ?
   `);
-  const lotPartCnt        = db.prepare('SELECT COUNT(DISTINCT round_id) as cnt FROM lottery_bets WHERE user_id = ?');
-  const lotBetsCnt        = db.prepare('SELECT COUNT(*) as cnt FROM lottery_bets WHERE user_id = ?');
+  const lotPartCnt        = db.prepare(`
+    SELECT COUNT(DISTINCT lb.round_id) as cnt FROM lottery_bets lb
+    JOIN lottery_rounds lr ON lr.id = lb.round_id
+    WHERE lb.user_id = ? AND lr.room_id = ?
+  `);
+  const lotBetsCnt        = db.prepare(`
+    SELECT COUNT(*) as cnt FROM lottery_bets lb
+    JOIN lottery_rounds lr ON lr.id = lb.round_id
+    WHERE lb.user_id = ? AND lr.room_id = ?
+  `);
   const lotMaxBetsInRound = db.prepare(`
     SELECT COALESCE(MAX(cnt), 0) as max FROM (
-      SELECT COUNT(*) as cnt FROM lottery_bets WHERE user_id = ? GROUP BY round_id
+      SELECT COUNT(*) as cnt FROM lottery_bets lb
+      JOIN lottery_rounds lr ON lr.id = lb.round_id
+      WHERE lb.user_id = ? AND lr.room_id = ?
+      GROUP BY lb.round_id
     )
   `);
+  const getRoomMsgCnt     = db.prepare('SELECT COUNT(*) AS cnt FROM messages WHERE user_id = ? AND room_id = ?');
 
-  const users = getUsers.all();
+  const pairs = getUserRooms.all();
   let totalAwarded = 0;
 
-  for (const { id: userId } of users) {
-    stmts.upsertUserStats.run(userId);
+  for (const { user_id: userId, room_id: roomId } of pairs) {
+    stmts.upsertUserStats.run(userId, roomId);
 
-    const earnedSet = new Set(stmts.getEarnedAchievements.all(userId).map((r) => r.achievement_id));
-    const roomRow   = getFirstRoom.get(userId);
-    if (!roomRow) continue; // never joined a room — nothing to award
-    const roomId = roomRow.room_id;
+    const earnedSet = new Set(stmts.getEarnedAchievements.all(userId, roomId).map((r) => r.achievement_id));
+    const rm        = stmts.getRoomMember.get(roomId, userId);
+    if (!rm) continue;
+    const inv = JSON.parse(rm.inventory_json || '{}');
 
-    // Merge inventories across all rooms (take per-key maximum)
-    const inv = {};
-    for (const row of getRoomInvs.all(userId)) {
-      for (const [k, v] of Object.entries(JSON.parse(row.inventory_json || '{}'))) {
-        if (v > (inv[k] || 0)) inv[k] = v;
-      }
-    }
-
-    const msgCnt     = stmts.getUserMessageCount.get(userId).cnt;
-    const emojiCount = stmts.getUnlockedEmojis.all(userId).length;
+    const msgCnt     = getRoomMsgCnt.get(userId, roomId).cnt;
+    const emojiCount = stmts.getUnlockedEmojis.all(userId, roomId).length;
 
     const newlyEarned = [];
     const maybe = (id, cond) => {
@@ -336,12 +330,12 @@ function backfillAchievements() {
       }
     };
 
-    const boughtCnt    = mktBoughtCnt.get(userId).cnt;
-    const soldCnt      = mktSoldCnt.get(userId).cnt;
-    const lotWins      = lotWinCnt.get(userId).cnt;
-    const lotParts     = lotPartCnt.get(userId).cnt;
-    const lotBets      = lotBetsCnt.get(userId).cnt;
-    const lotMaxPerRnd = lotMaxBetsInRound.get(userId).max;
+    const boughtCnt    = mktBoughtCnt.get(userId, roomId).cnt;
+    const soldCnt      = mktSoldCnt.get(userId, roomId).cnt;
+    const lotWins      = lotWinCnt.get(userId, roomId).cnt;
+    const lotParts     = lotPartCnt.get(userId, roomId).cnt;
+    const lotBets      = lotBetsCnt.get(userId, roomId).cnt;
+    const lotMaxPerRnd = lotMaxBetsInRound.get(userId, roomId).max;
 
     maybe('first_message',          msgCnt >= 1);
     maybe('messages_50',            msgCnt >= 50);
@@ -360,8 +354,8 @@ function backfillAchievements() {
     maybe('market_sell',            soldCnt >= 1);
     maybe('market_sell_10',         soldCnt >= 10);
     maybe('market_sell_30',         soldCnt >= 30);
-    maybe('bm_buy',                 !!bmBought.get(userId));
-    maybe('bm_sell',                !!bmSold.get(userId));
+    maybe('bm_buy',                 !!bmBought.get(userId, roomId));
+    maybe('bm_sell',                !!bmSold.get(userId, roomId));
     maybe('lottery_win',            lotWins >= 1);
     maybe('lottery_win_2',          lotWins >= 2);
     maybe('lottery_participate',    lotParts >= 1);
@@ -383,13 +377,13 @@ function backfillAchievements() {
 
     db.transaction(() => {
       for (const ach of newlyEarned) {
-        stmts.insertUserAchievement.run(userId, ach.id);
+        stmts.insertUserAchievement.run(userId, roomId, ach.id);
         stmts.updateRoomCoins.run(ach.reward, roomId, userId);
       }
     })();
 
     totalAwarded += newlyEarned.length;
-    console.log(`[Achievements] Backfill user ${userId}: ${newlyEarned.map((a) => a.id).join(', ')}`);
+    console.log(`[Achievements] Backfill user ${userId} room ${roomId}: ${newlyEarned.map((a) => a.id).join(', ')}`);
   }
 
   console.log(

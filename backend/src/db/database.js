@@ -98,7 +98,7 @@ db.exec(`
 // Migrations never need to be run manually — they apply automatically on startup.
 //
 // IMPORTANT: never edit a past migration. Always append a new one.
-const SCHEMA_VERSION = 17;
+const SCHEMA_VERSION = 19;
 
 const migrations = [
   // ── v1: P2P letter market ─────────────────────────────────────────────────
@@ -416,6 +416,138 @@ const migrations = [
       CREATE INDEX IF NOT EXISTS idx_lb_user_round ON lottery_bets(round_id, user_id);
     `);
   },
+
+  // v18 – message reactions (likes / dislikes)
+  () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS message_reactions (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id INTEGER NOT NULL REFERENCES messages(id),
+        user_id    INTEGER NOT NULL,
+        reaction   TEXT    NOT NULL CHECK(reaction IN ('like','dislike')),
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        UNIQUE(message_id, user_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_mr_message ON message_reactions(message_id);
+    `);
+  },
+
+  // v19 – make achievements, unlocked_emojis, and user_stats per-room
+  // Each existing global row is expanded into one row per room the user belongs to.
+  // If a user has no room_members rows, their data is preserved under room_id = 0.
+  () => {
+    // ── user_achievements → per-room ─────────────────────────────────────────
+    db.exec(`
+      ALTER TABLE user_achievements RENAME TO user_achievements_old;
+
+      CREATE TABLE user_achievements (
+        user_id        INTEGER NOT NULL REFERENCES users(id),
+        room_id        INTEGER NOT NULL DEFAULT 0,
+        achievement_id TEXT    NOT NULL,
+        earned_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+        PRIMARY KEY (user_id, room_id, achievement_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_ua_user_room ON user_achievements(user_id, room_id);
+
+      -- Expand each global record to every room the user is a member of
+      INSERT OR IGNORE INTO user_achievements (user_id, room_id, achievement_id, earned_at)
+        SELECT ua.user_id, rm.room_id, ua.achievement_id, ua.earned_at
+        FROM user_achievements_old ua
+        JOIN room_members rm ON rm.user_id = ua.user_id;
+
+      -- Preserve records for users with no room memberships
+      INSERT OR IGNORE INTO user_achievements (user_id, room_id, achievement_id, earned_at)
+        SELECT ua.user_id, 0, ua.achievement_id, ua.earned_at
+        FROM user_achievements_old ua
+        WHERE NOT EXISTS (
+          SELECT 1 FROM room_members WHERE user_id = ua.user_id
+        );
+
+      DROP TABLE user_achievements_old;
+    `);
+
+    // ── unlocked_emojis → per-room ────────────────────────────────────────────
+    db.exec(`
+      ALTER TABLE unlocked_emojis RENAME TO unlocked_emojis_old;
+
+      CREATE TABLE unlocked_emojis (
+        user_id   INTEGER NOT NULL REFERENCES users(id),
+        room_id   INTEGER NOT NULL DEFAULT 0,
+        emoji_key TEXT    NOT NULL,
+        PRIMARY KEY (user_id, room_id, emoji_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_ue_user_room ON unlocked_emojis(user_id, room_id);
+
+      INSERT OR IGNORE INTO unlocked_emojis (user_id, room_id, emoji_key)
+        SELECT ue.user_id, rm.room_id, ue.emoji_key
+        FROM unlocked_emojis_old ue
+        JOIN room_members rm ON rm.user_id = ue.user_id;
+
+      INSERT OR IGNORE INTO unlocked_emojis (user_id, room_id, emoji_key)
+        SELECT ue.user_id, 0, ue.emoji_key
+        FROM unlocked_emojis_old ue
+        WHERE NOT EXISTS (
+          SELECT 1 FROM room_members WHERE user_id = ue.user_id
+        );
+
+      DROP TABLE unlocked_emojis_old;
+    `);
+
+    // ── user_stats → per-room ─────────────────────────────────────────────────
+    // user_id was the PK; recreate with composite (user_id, room_id)
+    db.exec(`
+      ALTER TABLE user_stats RENAME TO user_stats_old;
+
+      CREATE TABLE user_stats (
+        user_id                  INTEGER NOT NULL REFERENCES users(id),
+        room_id                  INTEGER NOT NULL DEFAULT 0,
+        mine_finds               INTEGER NOT NULL DEFAULT 0,
+        consecutive_mine_fails   INTEGER NOT NULL DEFAULT 0,
+        lootboxes_total          INTEGER NOT NULL DEFAULT 0,
+        consecutive_common_boxes INTEGER NOT NULL DEFAULT 0,
+        prompt_losses            INTEGER NOT NULL DEFAULT 0,
+        market_buys              INTEGER NOT NULL DEFAULT 0,
+        market_sells             INTEGER NOT NULL DEFAULT 0,
+        lottery_wins             INTEGER NOT NULL DEFAULT 0,
+        lottery_participations   INTEGER NOT NULL DEFAULT 0,
+        lottery_bets_total       INTEGER NOT NULL DEFAULT 0,
+        lottery_bets_in_round    INTEGER NOT NULL DEFAULT 0,
+        prompt_wins              INTEGER NOT NULL DEFAULT 0,
+        prompt_correct_votes     INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (user_id, room_id)
+      );
+
+      INSERT OR IGNORE INTO user_stats
+        (user_id, room_id, mine_finds, consecutive_mine_fails, lootboxes_total,
+         consecutive_common_boxes, prompt_losses, market_buys, market_sells,
+         lottery_wins, lottery_participations, lottery_bets_total,
+         lottery_bets_in_round, prompt_wins, prompt_correct_votes)
+        SELECT s.user_id, rm.room_id,
+               s.mine_finds, s.consecutive_mine_fails, s.lootboxes_total,
+               s.consecutive_common_boxes, s.prompt_losses, s.market_buys, s.market_sells,
+               s.lottery_wins, s.lottery_participations, s.lottery_bets_total,
+               s.lottery_bets_in_round, s.prompt_wins, s.prompt_correct_votes
+        FROM user_stats_old s
+        JOIN room_members rm ON rm.user_id = s.user_id;
+
+      INSERT OR IGNORE INTO user_stats
+        (user_id, room_id, mine_finds, consecutive_mine_fails, lootboxes_total,
+         consecutive_common_boxes, prompt_losses, market_buys, market_sells,
+         lottery_wins, lottery_participations, lottery_bets_total,
+         lottery_bets_in_round, prompt_wins, prompt_correct_votes)
+        SELECT s.user_id, 0,
+               s.mine_finds, s.consecutive_mine_fails, s.lootboxes_total,
+               s.consecutive_common_boxes, s.prompt_losses, s.market_buys, s.market_sells,
+               s.lottery_wins, s.lottery_participations, s.lottery_bets_total,
+               s.lottery_bets_in_round, s.prompt_wins, s.prompt_correct_votes
+        FROM user_stats_old s
+        WHERE NOT EXISTS (
+          SELECT 1 FROM room_members WHERE user_id = s.user_id
+        );
+
+      DROP TABLE user_stats_old;
+    `);
+  },
 ];
 
 // Apply any pending migrations inside a single transaction so a crash mid-way
@@ -458,7 +590,9 @@ const stmts = {
   insertMessage:  db.prepare('INSERT INTO messages (user_id, text, coin_delta, room_id) VALUES (@userId, @text, @coinDelta, @roomId)'),
   getRecentMessages: db.prepare(`
     SELECT m.id, m.text, m.coin_delta, m.created_at,
-           u.id AS user_id, u.username, u.first_name, u.photo_url
+           u.id AS user_id, u.username, u.first_name, u.photo_url,
+           COALESCE((SELECT COUNT(*) FROM message_reactions WHERE message_id = m.id AND reaction = 'like'), 0)    AS likes,
+           COALESCE((SELECT COUNT(*) FROM message_reactions WHERE message_id = m.id AND reaction = 'dislike'), 0) AS dislikes
     FROM messages m
     JOIN users u ON u.id = m.user_id
     WHERE m.room_id = ?
@@ -669,14 +803,42 @@ const stmts = {
     "SELECT * FROM emoji_merges WHERE status = 'pending' AND finishes_at <= ?"
   ),
   insertUnlockedEmoji: db.prepare(
-    'INSERT OR IGNORE INTO unlocked_emojis (user_id, emoji_key) VALUES (?, ?)'
+    'INSERT OR IGNORE INTO unlocked_emojis (user_id, room_id, emoji_key) VALUES (?, ?, ?)'
   ),
   getUnlockedEmoji: db.prepare(
-    'SELECT * FROM unlocked_emojis WHERE user_id = ? AND emoji_key = ?'
+    'SELECT * FROM unlocked_emojis WHERE user_id = ? AND room_id = ? AND emoji_key = ?'
   ),
   getUnlockedEmojis: db.prepare(
-    'SELECT emoji_key FROM unlocked_emojis WHERE user_id = ?'
+    'SELECT emoji_key FROM unlocked_emojis WHERE user_id = ? AND room_id = ?'
   ),
+
+  // ── Message reactions ────────────────────────────────────────────────────────
+  getMessageById: db.prepare('SELECT id, user_id, room_id FROM messages WHERE id = ?'),
+  getMessageReaction: db.prepare(
+    'SELECT reaction FROM message_reactions WHERE message_id = ? AND user_id = ?'
+  ),
+  countMessageReactions: db.prepare(`
+    SELECT
+      COALESCE(SUM(CASE WHEN reaction='like'    THEN 1 ELSE 0 END), 0) AS likes,
+      COALESCE(SUM(CASE WHEN reaction='dislike' THEN 1 ELSE 0 END), 0) AS dislikes
+    FROM message_reactions WHERE message_id = ?
+  `),
+  countReactionType: db.prepare(
+    'SELECT COUNT(*) AS count FROM message_reactions WHERE message_id = ? AND reaction = ?'
+  ),
+  insertMessageReaction: db.prepare(
+    'INSERT INTO message_reactions (message_id, user_id, reaction) VALUES (?, ?, ?)'
+  ),
+  deleteMessageReaction: db.prepare(
+    'DELETE FROM message_reactions WHERE message_id = ? AND user_id = ?'
+  ),
+  getMyReactionsForRoom: db.prepare(`
+    SELECT mr.message_id, mr.reaction
+    FROM message_reactions mr
+    JOIN messages m ON m.id = mr.message_id
+    WHERE mr.user_id = ? AND m.room_id = ?
+    ORDER BY mr.message_id DESC LIMIT 200
+  `),
 
   // ── Push notification opt-in ───────────────────────────────────────────────
   setUserWriteAccess: db.prepare(
@@ -692,58 +854,58 @@ const stmts = {
 
   // ── Achievements ─────────────────────────────────────────────────────────────
   getEarnedAchievements: db.prepare(
-    'SELECT achievement_id FROM user_achievements WHERE user_id = ?'
+    'SELECT achievement_id FROM user_achievements WHERE user_id = ? AND room_id = ?'
   ),
   insertUserAchievement: db.prepare(
-    'INSERT OR IGNORE INTO user_achievements (user_id, achievement_id) VALUES (?, ?)'
+    'INSERT OR IGNORE INTO user_achievements (user_id, room_id, achievement_id) VALUES (?, ?, ?)'
   ),
   getUserStats: db.prepare(
-    'SELECT * FROM user_stats WHERE user_id = ?'
+    'SELECT * FROM user_stats WHERE user_id = ? AND room_id = ?'
   ),
   upsertUserStats: db.prepare(
-    'INSERT OR IGNORE INTO user_stats (user_id) VALUES (?)'
+    'INSERT OR IGNORE INTO user_stats (user_id, room_id) VALUES (?, ?)'
   ),
   statMineFind: db.prepare(
-    'UPDATE user_stats SET mine_finds = mine_finds + 1, consecutive_mine_fails = 0 WHERE user_id = ?'
+    'UPDATE user_stats SET mine_finds = mine_finds + 1, consecutive_mine_fails = 0 WHERE user_id = ? AND room_id = ?'
   ),
   statMineFail: db.prepare(
-    'UPDATE user_stats SET consecutive_mine_fails = consecutive_mine_fails + 1 WHERE user_id = ?'
+    'UPDATE user_stats SET consecutive_mine_fails = consecutive_mine_fails + 1 WHERE user_id = ? AND room_id = ?'
   ),
   statLootbox: db.prepare(
-    'UPDATE user_stats SET lootboxes_total = lootboxes_total + 1 WHERE user_id = ?'
+    'UPDATE user_stats SET lootboxes_total = lootboxes_total + 1 WHERE user_id = ? AND room_id = ?'
   ),
   statLootboxCommon: db.prepare(
-    'UPDATE user_stats SET consecutive_common_boxes = consecutive_common_boxes + 1 WHERE user_id = ?'
+    'UPDATE user_stats SET consecutive_common_boxes = consecutive_common_boxes + 1 WHERE user_id = ? AND room_id = ?'
   ),
   statLootboxNotCommon: db.prepare(
-    'UPDATE user_stats SET consecutive_common_boxes = 0 WHERE user_id = ?'
+    'UPDATE user_stats SET consecutive_common_boxes = 0 WHERE user_id = ? AND room_id = ?'
   ),
   statPromptLoss: db.prepare(
-    'UPDATE user_stats SET prompt_losses = prompt_losses + 1 WHERE user_id = ?'
+    'UPDATE user_stats SET prompt_losses = prompt_losses + 1 WHERE user_id = ? AND room_id = ?'
   ),
   statMarketBuy: db.prepare(
-    'UPDATE user_stats SET market_buys = market_buys + 1 WHERE user_id = ?'
+    'UPDATE user_stats SET market_buys = market_buys + 1 WHERE user_id = ? AND room_id = ?'
   ),
   statMarketSell: db.prepare(
-    'UPDATE user_stats SET market_sells = market_sells + 1 WHERE user_id = ?'
+    'UPDATE user_stats SET market_sells = market_sells + 1 WHERE user_id = ? AND room_id = ?'
   ),
   statLotteryBet: db.prepare(
-    'UPDATE user_stats SET lottery_bets_total = lottery_bets_total + 1 WHERE user_id = ?'
+    'UPDATE user_stats SET lottery_bets_total = lottery_bets_total + 1 WHERE user_id = ? AND room_id = ?'
   ),
   statLotteryParticipate: db.prepare(
-    'UPDATE user_stats SET lottery_participations = lottery_participations + 1 WHERE user_id = ?'
+    'UPDATE user_stats SET lottery_participations = lottery_participations + 1 WHERE user_id = ? AND room_id = ?'
   ),
   statLotteryBetsInRound: db.prepare(
-    'UPDATE user_stats SET lottery_bets_in_round = MAX(lottery_bets_in_round, ?) WHERE user_id = ?'
+    'UPDATE user_stats SET lottery_bets_in_round = MAX(lottery_bets_in_round, ?) WHERE user_id = ? AND room_id = ?'
   ),
   statLotteryWin: db.prepare(
-    'UPDATE user_stats SET lottery_wins = lottery_wins + 1 WHERE user_id = ?'
+    'UPDATE user_stats SET lottery_wins = lottery_wins + 1 WHERE user_id = ? AND room_id = ?'
   ),
   statPromptWin: db.prepare(
-    'UPDATE user_stats SET prompt_wins = prompt_wins + 1 WHERE user_id = ?'
+    'UPDATE user_stats SET prompt_wins = prompt_wins + 1 WHERE user_id = ? AND room_id = ?'
   ),
   statPromptCorrectVote: db.prepare(
-    'UPDATE user_stats SET prompt_correct_votes = prompt_correct_votes + 1 WHERE user_id = ?'
+    'UPDATE user_stats SET prompt_correct_votes = prompt_correct_votes + 1 WHERE user_id = ? AND room_id = ?'
   ),
   getVotersForReply: db.prepare(
     'SELECT voter_id FROM prompt_votes WHERE reply_id = ?'

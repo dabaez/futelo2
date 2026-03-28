@@ -90,7 +90,7 @@ function startMerge(userId, roomId, ingredients) {
 
   // Reject immediately if the recipe is already known to produce an unlocked emoji
   const previewMatch = matchRecipe(ingredients);
-  if (previewMatch && stmts.getUnlockedEmoji.get(userId, previewMatch.key)) {
+  if (previewMatch && stmts.getUnlockedEmoji.get(userId, roomId, previewMatch.key)) {
     throw new Error(`Ya tienes ${previewMatch.emoji} ${previewMatch.name} desbloqueado. ¡No necesitas forjarlo de nuevo!`);
   }
 
@@ -187,11 +187,11 @@ function _resolveFinishedMerge(userId, roomId, merge) {
   const matched     = matchRecipe(ingredients);
 
   if (matched) {
-    const alreadyHad = !!stmts.getUnlockedEmoji.get(userId, matched.key);
+    const alreadyHad = !!stmts.getUnlockedEmoji.get(userId, roomId, matched.key);
 
     db.transaction(() => {
       stmts.closeMerge.run('success', matched.key, merge.id);
-      if (!alreadyHad) stmts.insertUnlockedEmoji.run(userId, matched.key);
+      if (!alreadyHad) stmts.insertUnlockedEmoji.run(userId, roomId, matched.key);
     })();
 
     const freshInv = JSON.parse(stmts.getRoomMember.get(roomId, userId).inventory_json);
@@ -232,7 +232,7 @@ function buyHint(userId, roomId) {
     throw new Error(`Monedas insuficientes. Una pista cuesta ${HINT_COST} 🪙.`);
   }
 
-  const unlockedRows = stmts.getUnlockedEmojis.all(userId);
+  const unlockedRows = stmts.getUnlockedEmojis.all(userId, roomId);
   const unlockedKeys = new Set(unlockedRows.map((r) => r.emoji_key));
   const locked = EMOJI_RECIPES.filter((e) => !unlockedKeys.has(e.key));
 
@@ -252,11 +252,12 @@ function buyHint(userId, roomId) {
  * Get the current forge status for a user: active merge + all unlocked emojis.
  *
  * @param {number} userId
+ * @param {number} roomId
  * @returns {{ merge: object|null, unlockedEmojis: string[] }}
  */
-function getStatus(userId) {
+function getStatus(userId, roomId) {
   const merge    = stmts.getActiveMerge.get(userId) || null;
-  const unlocked = stmts.getUnlockedEmojis.all(userId);
+  const unlocked = stmts.getUnlockedEmojis.all(userId, roomId);
   return {
     merge,
     unlockedEmojis: unlocked.map((r) => r.emoji_key),
