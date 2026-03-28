@@ -43,6 +43,8 @@ const mockStmts = {
   // Per-room streak tracking (default: no prior streak in room)
   getRoomStreak:             { get: jest.fn(() => null) },
   upsertRoomStreak:          { run: jest.fn() },
+  // Forge emoji unlocks (default: none unlocked)
+  getUnlockedEmojis:         { all: jest.fn(() => []) },
 };
 
 jest.mock('../db/database', () => ({
@@ -98,6 +100,8 @@ beforeEach(() => {
   mockStmts.getRoomMemberMessageCount.get.mockReturnValue({ cnt: 1 });
   // Default: no prior room streak (treated as 0)
   mockStmts.getRoomStreak.get.mockReturnValue(null);
+  // Default: no forge emojis unlocked (empty array satisfies new char-whitelist check)
+  mockStmts.getUnlockedEmojis.all.mockReturnValue([]);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -192,6 +196,36 @@ describe('processMessage – validation', () => {
     // Make the second getRoomMember.get call (fresh read inside transaction) return ok
     stmts.getRoomMember.get.mockReturnValue(makeUser({ coins: 110 }));
     expect(() => processMessage(1, 'pp')).not.toThrow();
+  });
+
+  test('throws when message contains an arbitrary emoji not from the forge', () => {
+    setupUser(makeUser({ inventory_json: JSON.stringify({ h: 1, i: 1 }) }));
+    setupGameState();
+    // 🐱 is not a forge emoji — should be rejected regardless of inventory
+    expect(() => processMessage(1, 'hi 🐱')).toThrow(/car.cter no permitido/i);
+  });
+
+  test('throws when message contains non-Latin Unicode (e.g. Arabic text)', () => {
+    setupUser(makeUser({ inventory_json: JSON.stringify({}) }));
+    setupGameState();
+    expect(() => processMessage(1, 'مرحبا')).toThrow(/car.cter no permitido/i);
+  });
+
+  test('throws when message uses a forge emoji the user has NOT unlocked', () => {
+    setupUser(makeUser({ inventory_json: JSON.stringify({}) }));
+    setupGameState();
+    // getUnlockedEmojis returns empty → 😊 is a forge emoji but not unlocked
+    mockStmts.getUnlockedEmojis.all.mockReturnValueOnce([]);
+    expect(() => processMessage(1, '😊')).toThrow(/car.cter no permitido/i);
+  });
+
+  test('allows a forge emoji the user HAS unlocked (happy path)', () => {
+    setupUser(makeUser({ inventory_json: JSON.stringify({}) }));
+    setupGameState({ lastSenderId: 99 });
+    stmts.getRoomMember.get.mockReturnValue(makeUser({ coins: 110 }));
+    // Simulate the user having unlocked 'happy' (😊)
+    mockStmts.getUnlockedEmojis.all.mockReturnValueOnce([{ emoji_key: 'happy' }]);
+    expect(() => processMessage(1, '😊')).not.toThrow();
   });
 });
 

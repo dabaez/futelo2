@@ -34,6 +34,7 @@ const {
   MAX_LETTER_LEVEL,
   SYMBOL_CHARS,
   CAP_OVERFLOW_COINS_PER_LETTER,
+  EMOJI_RECIPES,
 } = require('../config');
 
 /**
@@ -80,6 +81,29 @@ function letterRequirements(text) {
     }
   }
   return req;
+}
+
+// Build a lookup from emoji-character → recipe-key for quick forge-emoji checks.
+const EMOJI_CHAR_SET = new Set(EMOJI_RECIPES.map((r) => r.emoji));
+const EMOJI_KEY_BY_CHAR = Object.fromEntries(EMOJI_RECIPES.map((r) => [r.emoji, r.key]));
+
+/**
+ * Returns the first disallowed grapheme cluster found in `text`, or null if all
+ * characters are valid. Allowed: a-z/ñ, 0-9, SYMBOL_CHARS, whitespace, and any
+ * forge emoji whose key is in `unlockedEmojiKeys`.
+ */
+function findUnauthorizedChar(text, unlockedEmojiKeys) {
+  const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+  for (const { segment } of segmenter.segment(text)) {
+    const lc = segment.toLowerCase();
+    if ((lc >= 'a' && lc <= 'z') || lc === 'ñ') continue;
+    if (segment >= '0' && segment <= '9') continue;
+    if (SYMBOL_CHARS.includes(segment)) continue;
+    if (segment === ' ' || segment === '\n' || segment === '\r') continue;
+    if (EMOJI_CHAR_SET.has(segment) && unlockedEmojiKeys.has(EMOJI_KEY_BY_CHAR[segment])) continue;
+    return segment;
+  }
+  return null;
 }
 
 // Uniform pool: every letter (a–z + ñ) appears once, plus number/symbol group keys.
@@ -147,6 +171,19 @@ function processMessage(userId, text, roomId = 0) {
 
   // ── Step 2: Letter requirements ───────────────────────────────────────────
   const req = letterRequirements(text);
+
+  // ── Step 2b: Unauthorized character check ────────────────────────────────
+  // Reject any character that isn't a letter, digit, SYMBOL_CHARS entry,
+  // whitespace, or a forge emoji the user has actually unlocked.
+  const unlockedRows = stmts.getUnlockedEmojis.all(userId);
+  const unlockedEmojiKeys = new Set(unlockedRows.map((r) => r.emoji_key));
+  const badChar = findUnauthorizedChar(text, unlockedEmojiKeys);
+  if (badChar) {
+    throw new Error(
+      `El mensaje contiene un carácter no permitido. ` +
+      `Solo puedes usar letras, números, los símbolos del teclado y emojis desbloqueados en la Forja.`
+    );
+  }
 
   // ── Step 3: Active letter locks ───────────────────────────────────────────
   const locks = stmts.getLocks.all(roomId, userId, nowSec);
