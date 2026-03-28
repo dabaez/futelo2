@@ -171,6 +171,7 @@ export default function EmojiForgeModal({
   const [err,           setErr]           = useState(null);
   const [hints,         setHints]         = useState([]);        // array of mystery hint strings
   const [hintLoading,   setHintLoading]   = useState(false);
+  const [hintCost,      setHintCost]      = useState(20);        // from config
   const [celebEvent,    setCelebEvent]    = useState(null);      // celebration trigger
   const timerRef = useRef(null);
 
@@ -181,7 +182,17 @@ export default function EmojiForgeModal({
 
   // ── Hydrate status on open ───────────────────────────────────────────────
   useEffect(() => {
-    if (!isOpen || !initData) return;
+    if (!isOpen) return;
+
+    // Fetch config for hint cost
+    fetch(`${BASE_URL}/api/config`)
+      .then(safeJson)
+      .then((data) => {
+        if (data?.HINT_COST != null) setHintCost(data.HINT_COST);
+      })
+      .catch(() => {});
+
+    if (!initData) return;
     fetch(`${BASE_URL}/api/emoji/status`, { headers: { 'x-init-data': initData } })
       .then(safeJson)
       .then((data) => {
@@ -561,6 +572,7 @@ export default function EmojiForgeModal({
                     hints={hints}
                     hintLoading={hintLoading}
                     coins={coins}
+                    hintCost={hintCost}
                     allUnlocked={unlockedEmojis.length === ALL_EMOJIS.length}
                     onHint={handleHint}
                   />
@@ -576,9 +588,8 @@ export default function EmojiForgeModal({
 }
 
 // ── Hint section sub-component ────────────────────────────────────────────────
-function HintSection({ hints, hintLoading, coins, allUnlocked, onHint }) {
+function HintSection({ hints, hintLoading, coins, hintCost, allUnlocked, onHint }) {
   const [expanded, setExpanded] = useState(false);
-  const HINT_COST = 30;
 
   if (allUnlocked) return null;
 
@@ -617,13 +628,13 @@ function HintSection({ hints, hintLoading, coins, allUnlocked, onHint }) {
           ))}
           <button
             onClick={onHint}
-            disabled={hintLoading || coins < HINT_COST}
+            disabled={hintLoading || coins < hintCost}
             className={`w-full text-xs px-3 py-2 rounded-lg font-semibold transition-colors
-              ${hintLoading || coins < HINT_COST
+              ${hintLoading || coins < hintCost
                 ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
                 : 'bg-tg-button text-tg-btn-text active:brightness-90'}`}
           >
-            {hintLoading ? '🔮 Consultando las sombras…' : `Comprar pista misteriosa — ${HINT_COST} 🪙`}
+            {hintLoading ? '🔮 Consultando las sombras…' : `Comprar pista misteriosa — ${hintCost} 🪙`}
           </button>
         </div>
       )}
