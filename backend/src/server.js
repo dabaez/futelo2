@@ -55,6 +55,11 @@ const {
   getCurrentHeat, addHeat, catchProbability, runCatchCheck,
 }                                        = require('./engine/blackMarketHeat');
 const { buyPickaxe, swing: mineSwing }   = require('./engine/mining');
+const {
+  startMerge, instantComplete, buyHint, getStatus: getForgeStatus,
+  processFinishedMerges,
+}                                        = require('./engine/emojiForge');
+const { ACHIEVEMENTS, checkAchievements, backfillAchievements } = require('./engine/achievements');
 const config                             = require('./config');
 
 const BEG_GIFT_AMOUNT  = config.BEG_GIFT_AMOUNT;
@@ -62,6 +67,40 @@ const BEG_COOLDOWN_SEC = config.BEG_COOLDOWN_SEC;
 
 // In-memory cooldown map: userId → unix-ms when the cooldown expires
 const begCooldowns = new Map();
+
+// ── Fuzzy black-market mention detector ───────────────────────────────────────
+// Returns true if a message plausibly references "mercado negro", tolerating
+// typos (up to 2 edit-distance), missing letters, and common abbreviations.
+function _levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j - 1], dp[i - 1][j], dp[i][j - 1]);
+  return dp[m][n];
+}
+
+function _mentionsBM(text) {
+  const t = text.toLowerCase();
+  // Fast path – exact phrase
+  if (t.includes('mercado negro')) return true;
+  // Abbreviation patterns: "merc neg*", "mrc ngr", "m.negro", etc.
+  if (/mer?c[a-z]*\s+neg/.test(t)) return true;
+  // Word-pair fuzzy: any two consecutive tokens within edit-distance 2 of
+  // "mercado" and "negro" respectively
+  const tokens = t.split(/\s+/);
+  for (let i = 0; i < tokens.length - 1; i++) {
+    if (_levenshtein(tokens[i], 'mercado') <= 2 && _levenshtein(tokens[i + 1], 'negro') <= 2) return true;
+  }
+  // Single run-together word, e.g. "mercadonegro"
+  for (const tok of tokens) {
+    if (_levenshtein(tok, 'mercadonegro') <= 3) return true;
+  }
+  return false;
+}
 
 const PORT             = Number(process.env.SERVER_PORT) || 3001;
 const BOT_TOKEN        = process.env.BOT_TOKEN;
@@ -277,6 +316,7 @@ app.post('/api/message', authMiddleware, (req, res) => {
     const senderName = user.first_name || user.username || 'Alguien';
     const preview    = text.length > 60 ? `${text.slice(0, 57)}…` : text;
     postToRoomThread(roomId, `💬 ${senderName}: ${preview}`);
+    awardAchievements(req.tgUser.id, roomId, 'message', { text });
 
     res.json({ ok: true, ...result });
   } catch (err) {
@@ -294,6 +334,7 @@ app.post('/api/shop/roll', authMiddleware, (req, res) => {
       newInventory: result.newInventory,
       newLetters:   result.newLetters,
     });
+    awardAchievements(req.tgUser.id, req.chatId, 'roll', { rarity: result.rarity });
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -368,6 +409,8 @@ app.post('/api/market/buy/:id', authMiddleware, (req, res) => {
       `💰 ¡Vendiste "${result.letter.toUpperCase()}" por ${result.sellerReceives} 🪙!`,
       'success'
     );
+    awardAchievements(req.tgUser.id,   result.roomId, 'market_buy',  {});
+    awardAchievements(result.sellerId, result.roomId, 'market_sell', {});
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -451,6 +494,8 @@ app.post('/api/bm/buy/:id', authMiddleware, (req, res) => {
       `🕵️ ¡Vendiste "${result.letter.toUpperCase()}" por ${result.sellerReceives} 🪙 (mercado negro)!`,
       'success'
     );
+    awardAchievements(req.tgUser.id,   result.roomId, 'bm_buy',  {});
+    awardAchievements(result.sellerId, result.roomId, 'bm_sell', {});
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -538,6 +583,8 @@ app.post('/api/lottery/bet', authMiddleware, (req, res) => {
       newInventory: result.newInventory,
       newLetters:   [],
     });
+    const betsInRound = stmts.getUserBetCountInRound.get(roundId, req.tgUser.id).count;
+    awardAchievements(req.tgUser.id, roomId, 'lottery_bet', { betsInRound });
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -567,6 +614,61 @@ app.post('/api/mine/swing', authMiddleware, (req, res) => {
     const update = { pickaxeHits: result.hitsLeft };
     if (result.found) update.newInventory = result.newInventory;
     io.to(`user:${req.tgUser.id}`).emit('user_update', update);
+    awardAchievements(req.tgUser.id, req.chatId, 'mine_swing', { found: result.found });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ── REST: /api/emoji ─────────────────────────────────────────────────────────
+
+// GET /api/emoji/status – active merge + unlocked emojis for the caller
+app.get('/api/emoji/status', authMiddleware, (req, res) => {
+  try {
+    res.json(getForgeStatus(req.tgUser.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/emoji/start – begin a merge, deducting inventory levels
+app.post('/api/emoji/start', authMiddleware, (req, res) => {
+  const { ingredients } = req.body;  // string[]
+  try {
+    const result = startMerge(req.tgUser.id, req.chatId, ingredients);
+    io.to(`user:${req.tgUser.id}`).emit('user_update', {
+      newInventory: result.newInventory,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/emoji/instant – pay coins to finish the active merge immediately
+app.post('/api/emoji/instant', authMiddleware, (req, res) => {
+  try {
+    const result = instantComplete(req.tgUser.id, req.chatId);
+    io.to(`user:${req.tgUser.id}`).emit('user_update', {
+      newInventory: result.newInventory,
+      newCoins:     result.newCoins,
+    });
+    io.to(`user:${req.tgUser.id}`).emit('emoji_complete', result);
+    if (result.success && !result.alreadyHad) {
+      awardAchievements(req.tgUser.id, req.chatId, 'emoji_unlock', {});
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/emoji/hint – buy a mystery hint for a random unowned emoji
+app.post('/api/emoji/hint', authMiddleware, (req, res) => {
+  try {
+    const result = buyHint(req.tgUser.id, req.chatId);
+    io.to(`user:${req.tgUser.id}`).emit('user_update', { newCoins: result.newCoins });
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -578,6 +680,18 @@ app.post('/api/mine/swing', authMiddleware, (req, res) => {
 // configured NOTIFY_CHANNEL_ID channel instead of individual DMs.
 app.post('/api/notifications/enable', authMiddleware, (req, res) => {
   res.json({ ok: true });
+});
+
+// GET /api/achievements – full catalogue with earned flag for the caller
+app.get('/api/achievements', authMiddleware, (req, res) => {
+  try {
+    const earned = new Set(
+      stmts.getEarnedAchievements.all(req.tgUser.id).map((r) => r.achievement_id)
+    );
+    res.json(ACHIEVEMENTS.map((a) => ({ ...a, earned: earned.has(a.id) })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Socket.io ─────────────────────────────────────────────────────────────
@@ -624,8 +738,8 @@ io.on('connection', (socket) => {
         coinDelta:    result.coinDelta,
       });
 
-      // Heat increase when someone mentions the black market
-      if (text.toLowerCase().includes('mercado negro')) {
+      // Heat increase when someone mentions the black market (fuzzy: typos/abbrevs tolerated)
+      if (_mentionsBM(text)) {
         const newHeat = addHeat(config.BM_HEAT_CHAT_INCREMENT);
         io.to(`room:${roomId}`).emit('bm_heat_update', { heat: newHeat, catchProb: catchProbability(newHeat) });
       }
@@ -634,6 +748,7 @@ io.on('connection', (socket) => {
       const senderName = user.first_name || user.username || 'Alguien';
       const preview    = text.length > 60 ? `${text.slice(0, 57)}…` : text;
       postToRoomThread(roomId, `💬 ${senderName}: ${preview}`);
+      awardAchievements(userId, roomId, 'message', { text });
     } catch (err) {
       socket.emit('rejected_message', { reason: err.message });
     }
@@ -751,6 +866,34 @@ function notifyUser(userId, text, type = 'info') {
 }
 
 /**
+ * Check and award achievements after a game event, then notify the player.
+ * Safe to call without try/catch — errors are logged and swallowed.
+ *
+ * @param {number} userId
+ * @param {number} roomId  Room where the event occurred; reward coins go here.
+ * @param {string} event   Achievement event key (e.g. 'message', 'roll').
+ * @param {object} [data]  Event-specific payload.
+ */
+function awardAchievements(userId, roomId, event, data = {}) {
+  try {
+    const newAchs = checkAchievements(userId, roomId, event, data);
+    for (const a of newAchs) {
+      notifyUser(
+        userId,
+        `🏅 ¡Logro desbloqueado! ${a.icon} "${a.name}" — +${a.reward} 🪙`,
+        'success'
+      );
+    }
+    if (newAchs.length > 0) {
+      const fresh = stmts.getRoomMember.get(roomId, userId);
+      if (fresh) io.to(`user:${userId}`).emit('user_update', { newCoins: fresh.coins });
+    }
+  } catch (err) {
+    console.error(`[Achievements] user=${userId} event=${event}: ${err.message}`);
+  }
+}
+
+/**
  * Post a message to the room's configured Telegram thread.
  * Reads notify_thread_id from the rooms table:
  *   NULL  → not configured, do nothing
@@ -848,6 +991,7 @@ if (require.main === module) {
         // Remove from the room's public listings feed
         io.to(`room:${cRoomId}`).emit('bm_listing_cancelled', { listingId: c.listingId });
         console.log(`[BM] User ${c.sellerId} caught selling "${c.letter}" in room ${cRoomId}. Fine: ${c.fine}. Heat: ${newHeat}`);
+        awardAchievements(c.sellerId, cRoomId, 'bm_caught', {});
       }
 
       for (const e of expired) {
@@ -868,6 +1012,11 @@ if (require.main === module) {
         io.emit('bm_heat_update', { heat: newHeat, catchProb: catchProbability(newHeat) });
       }
     }
+
+    // ── Emoji forge: resolve finished merges (global, not per-room) ─────────
+    processFinishedMerges(io, notifyUser, (userId, roomId) => {
+      awardAchievements(userId, roomId, 'emoji_unlock', {});
+    });
 
     // ── Per-room prompt & lottery checks ──────────────────────────────────
     const rooms = stmts.getAllRooms.all();
@@ -903,6 +1052,15 @@ if (require.main === module) {
             );
           }
           console.log(`[Lottery] Room ${rid}: closed. Letter: ${lResult.secretLetter}. Winners: ${lResult.winners.map((w) => w.userId).join(', ') || 'none'}`);
+          // Award lottery achievements
+          for (const w of lResult.winners) {
+            awardAchievements(w.userId, rid, 'lottery_win', { coinsEarned: w.coinsEarned });
+          }
+          const allBetters = [...new Set(stmts.getLotteryBets.all(lResult.roundId).map((b) => b.user_id))];
+          const winnerSet  = new Set(lResult.winners.map((w) => w.userId));
+          for (const uid of allBetters) {
+            if (!winnerSet.has(uid)) awardAchievements(uid, rid, 'lottery_lose', {});
+          }
         }
       }
 
@@ -930,6 +1088,32 @@ if (require.main === module) {
           }
           const winnerNames = result.winners?.map((w) => w.userId).join(', ') || 'none';
           console.log(`[Prompt] Room ${rid}: closed "${active.text}". Winners: ${winnerNames}`);
+          // Award prompt achievements
+          const pWinnerSet = new Set((result.winners || []).map((w) => w.userId));
+          for (const w of (result.winners || [])) {
+            awardAchievements(w.userId, rid, 'prompt_win', {});
+          }
+          for (const r of (result.runnersUp || [])) {
+            awardAchievements(r.userId, rid, 'prompt_runner_up', {});
+          }
+          for (const reply of (result.replies || [])) {
+            if (!pWinnerSet.has(reply.userId)) awardAchievements(reply.userId, rid, 'prompt_lose', {});
+          }
+          // Award vote-based achievements
+          if ((result.winners || []).length > 0) {
+            const winnerReplyIds = new Set(result.winners.map((w) => w.id));
+            for (const replyId of winnerReplyIds) {
+              for (const { voter_id } of stmts.getVotersForReply.all(replyId)) {
+                awardAchievements(voter_id, rid, 'prompt_vote_win', {});
+              }
+            }
+          }
+          for (const reply of (result.replies || [])) {
+            if (reply.votes === 1) {
+              const voters = stmts.getVotersForReply.all(reply.id);
+              if (voters.length === 1) awardAchievements(voters[0].voter_id, rid, 'prompt_vote_only', {});
+            }
+          }
         }
       }
 
@@ -950,6 +1134,13 @@ if (require.main === module) {
 // ── Start HTTP server ─────────────────────────────────────────────────────
 // Guard lets tests import this module without binding a real port.
 if (require.main === module) {
+  // Retroactively award achievements reconstructable from existing DB history.
+  // INSERT OR IGNORE ensures this is idempotent across restarts; already-earned
+  // achievements are never double-awarded.
+  try { backfillAchievements(); } catch (err) {
+    console.error('[Achievements] Backfill error:', err.message);
+  }
+
   server.listen(PORT, () => {
     console.log(`[Server] Futelo backend listening on port ${PORT}`);
   });

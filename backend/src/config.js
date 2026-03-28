@@ -61,7 +61,7 @@ module.exports = {
    * Characters treated as symbols for the shared _symbols inventory group.
    * Must match the SYMBOL_CHARS constant in RestrictedKeyboard.jsx.
    */
-  SYMBOL_CHARS: '!?.,:-()@#&*',
+  SYMBOL_CHARS: '!?.,:-()@#&*;<>+~$%/^',
 
   // ── Prompt feature ──────────────────────────────────────────────────────────
   /** How long (seconds) a prompt stays open for replies and votes. */
@@ -89,19 +89,19 @@ module.exports = {
   /** Maximum heat value (0–100 scale). */
   BM_HEAT_MAX: 100,
   /** Heat points lost per real minute (passive decay toward 0). */
-  BM_HEAT_DECAY_PER_MIN: 3,
+  BM_HEAT_DECAY_PER_MIN: 1 / 3, // 1 point every 3 minutes
   /** Heat gained when a seller is caught in the black market. */
   BM_HEAT_CATCH_INCREMENT: 25,
   /** Heat gained when someone mentions "mercado negro" in chat. */
-  BM_HEAT_CHAT_INCREMENT: 10,
+  BM_HEAT_CHAT_INCREMENT: 15,
   /** Minimum catch probability per check cycle (at heat = 0). */
-  BM_BASE_CATCH_PROB: 0.05,
+  BM_BASE_CATCH_PROB: 0.1,
   /** Extra catch probability added at maximum heat (heat = 100). */
-  BM_HEAT_CATCH_SCALE: 0.25,
+  BM_HEAT_CATCH_SCALE: 0.65,
   /** Coins fined from a seller when they are caught. */
   BM_CATCH_FINE: 50,
   /** How often (seconds) the server rolls the catch check. */
-  BM_CHECK_INTERVAL_SEC: 2 * 60,
+  BM_CHECK_INTERVAL_SEC: 1 * 60,
   /** An open BM listing auto-expires after this many seconds (letter returned, no coins). */
   BM_LISTING_EXPIRY_SEC: 60 * 60,
 
@@ -177,6 +177,81 @@ module.exports = {
   PICKAXE_HITS: 1000,
   /** Probability (0–1) that a single swing uncovers a letter. */
   MINE_HIT_CHANCE: 0.01,
+
+  // ── Emoji Forge ────────────────────────────────────────────────────────────
+  /** How long (seconds) a forge attempt takes before resolving. */
+  EMOJI_MERGE_DURATION_SEC: 60 * 60,        // 1 hour
+  /**
+   * Coin cost per remaining second to instant-complete a merge.
+   * Total instant cost = ceil(secsLeft × EMOJI_INSTANT_COST_PER_SEC).
+   * At 1 hour remaining → 3600 × 0.02 = 72 coins.
+   */
+  EMOJI_INSTANT_COST_PER_SEC: 0.02,
+  /** Coin cost to buy a cryptic hint for one emoji. */
+  HINT_COST: 20,
+  /**
+   * Emoji recipes. Each emoji has multiple valid ingredient sequences, so
+   * players can discover via intuition. All matching is case-insensitive for
+   * letters. Symbols use the shared _symbols pool; numbers use _numbers;
+   * letters use their individual inventory key.
+   *
+   * Available chars on the keyboard:
+   *   Letters : a-z, ñ
+   *   Symbols : ! ? . , : - ( ) @ # & * ; < > + ~ $ % / ^
+   *   Numbers : 0-9
+   */
+  EMOJI_RECIPES: [
+    {
+      key: 'happy',  emoji: '😊', name: 'Feliz',
+      recipes: [[':',')'],['c',':'],['(',':']],
+      hint: 'Ok, todos saben como hacer una carita feliz. Dos símbolos, ojos y boca. Piensa!',
+    },
+    {
+      key: 'sad',    emoji: '😢', name: 'Triste',
+      recipes: [[':','('],[')',':'],[':','c']],
+      hint: 'Una cara triste es como como una feliz, pero al reves. Puedes usar la letra «c» incluso.',
+    },
+    {
+      key: 'tongue', emoji: '😛', name: 'Lengua',
+      recipes: [[':','P'],[':','p'],['p',':'],['P',':']],
+      hint: 'Bleh! Te saco la lengua. Bleh! Ojos y una lengua. Bleh!',
+    },
+    {
+      key: 'laugh',  emoji: '😂', name: 'Carcajada',
+      recipes: [['X','D'],['x','d'],['X','d'],['x','D']],
+      hint: 'Este icóncio par de letras se usa para representar una risa. A pesar de que solo tiene sentido cuando son mayúsculas, la gente lo usa en minúscula igual. Incluso lo dicen en voz alta, ya no importa nada.',
+    },
+    {
+      key: 'cool',   emoji: '😎', name: 'Cool',
+      recipes: [['B',')'],['b',')'],['8',')']],
+      hint: 'Gafas de sol y una sonrisa. La sonrisa la tenemos clara, pero las gafas de sol se hacen de varias formas.',
+    },
+    {
+      key: 'wink',   emoji: '😉', name: 'Guiño',
+      recipes: [[';',')']],
+      hint: 'Guiño guiño wink wink, ya sabes como hacerlo. Es como la carita feliz pero un ojo guiñando.',
+    },
+    {
+      key: 'cry',    emoji: '😭', name: 'Llora',
+      recipes: [['Q', 'n','Q'],['q', 'n','q'],['T', 'n', 'T'], ['t', 'n', 't']],
+      hint: 'Dos letras repetidas se levantan alrededor de una mueca para llorar. No con simbolos, pero con letras.',
+    },
+    {
+      key: 'angry',  emoji: '😠', name: 'Enojado',
+      recipes: [['>',':','('],[')',':','<'],['>',':','c'],['>',':','C']],
+      hint: 'Carita enojada. Es la carita triste pero con cejas enojadas. Esta pista es muy buena, cierto?',
+    },
+    {
+      key: 'heart', emoji: '❤️', name: 'Corazón',
+      recipes: [['<','3']],
+      hint: 'Esto no es una comparacion matematica, es un corazon!!',
+    },
+    {
+      key: 'think', emoji: '🤔', name: 'Pensando',
+      recipes: [[':','/'],[':','\\'],['/',':'],['\\',':']],
+      hint: 'Cuando estás pensando, a veces haces una mueca con la boca. Tu boca se va como a los lados... como un... slash...',
+    }
+  ],
 
   // ── Prompt question pool ────────────────────────────────────────────────────
   /**

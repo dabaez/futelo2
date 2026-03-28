@@ -98,7 +98,7 @@ db.exec(`
 // Migrations never need to be run manually — they apply automatically on startup.
 //
 // IMPORTANT: never edit a past migration. Always append a new one.
-const SCHEMA_VERSION = 14;
+const SCHEMA_VERSION = 17;
 
 const migrations = [
   // ── v1: P2P letter market ─────────────────────────────────────────────────
@@ -337,6 +337,85 @@ const migrations = [
   () => {
     db.exec('UPDATE rooms SET notify_thread_delete = 1 WHERE gatekeeper = 1');
   },
+
+  // v15 – emoji forge
+  // emoji_merges  – one active merge per user (user_id + status='pending' unique via query)
+  // unlocked_emojis – permanent per-user emoji unlocks (global, not per-room)
+  () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS emoji_merges (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id     INTEGER NOT NULL REFERENCES users(id),
+        room_id     INTEGER NOT NULL DEFAULT 0,
+        ingredients TEXT    NOT NULL,  -- JSON array of chars
+        finishes_at INTEGER NOT NULL,
+        status      TEXT    NOT NULL DEFAULT 'pending', -- pending | success | failed
+        emoji_key   TEXT                                -- set on success
+      );
+      CREATE INDEX IF NOT EXISTS idx_em_user_status ON emoji_merges(user_id, status);
+      CREATE INDEX IF NOT EXISTS idx_em_pending     ON emoji_merges(status, finishes_at);
+
+      CREATE TABLE IF NOT EXISTS unlocked_emojis (
+        user_id   INTEGER NOT NULL REFERENCES users(id),
+        emoji_key TEXT    NOT NULL,
+        PRIMARY KEY (user_id, emoji_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_ue_user ON unlocked_emojis(user_id);
+    `);
+  },
+
+  // v16 – achievements system
+  // user_achievements – one row per earned achievement (global per-user, not per-room)
+  // user_stats        – running counters used by achievement conditions
+  () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS user_achievements (
+        user_id        INTEGER NOT NULL REFERENCES users(id),
+        achievement_id TEXT    NOT NULL,
+        earned_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+        PRIMARY KEY (user_id, achievement_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_ua_user ON user_achievements(user_id);
+
+      CREATE TABLE IF NOT EXISTS user_stats (
+        user_id                  INTEGER PRIMARY KEY REFERENCES users(id),
+        mine_finds               INTEGER NOT NULL DEFAULT 0,
+        consecutive_mine_fails   INTEGER NOT NULL DEFAULT 0,
+        lootboxes_total          INTEGER NOT NULL DEFAULT 0,
+        consecutive_common_boxes INTEGER NOT NULL DEFAULT 0,
+        prompt_losses            INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+  },
+
+  // v17 – extend user_stats with market/lottery/prompt counters;
+  //        remove UNIQUE(round_id, user_id) from lottery_bets to allow multi-letter betting
+  () => {
+    db.exec(`
+      ALTER TABLE user_stats ADD COLUMN market_buys         INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE user_stats ADD COLUMN market_sells        INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE user_stats ADD COLUMN lottery_wins        INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE user_stats ADD COLUMN lottery_participations INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE user_stats ADD COLUMN lottery_bets_total  INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE user_stats ADD COLUMN lottery_bets_in_round INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE user_stats ADD COLUMN prompt_wins         INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE user_stats ADD COLUMN prompt_correct_votes INTEGER NOT NULL DEFAULT 0;
+    `);
+    db.exec(`
+      ALTER TABLE lottery_bets RENAME TO lottery_bets_old;
+      CREATE TABLE lottery_bets (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        round_id   INTEGER NOT NULL REFERENCES lottery_rounds(id),
+        user_id    INTEGER NOT NULL REFERENCES users(id),
+        letter     TEXT    NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+      );
+      INSERT INTO lottery_bets SELECT id, round_id, user_id, letter, created_at FROM lottery_bets_old;
+      DROP TABLE lottery_bets_old;
+      CREATE INDEX IF NOT EXISTS idx_lb_round      ON lottery_bets(round_id);
+      CREATE INDEX IF NOT EXISTS idx_lb_user_round ON lottery_bets(round_id, user_id);
+    `);
+  },
 ];
 
 // Apply any pending migrations inside a single transaction so a crash mid-way
@@ -572,6 +651,33 @@ const stmts = {
     ON CONFLICT(room_id, user_id) DO UPDATE SET streak = excluded.streak
   `),
 
+  // ── Emoji forge ──────────────────────────────────────────────────────────────
+  insertMerge: db.prepare(
+    "INSERT INTO emoji_merges (user_id, room_id, ingredients, finishes_at) VALUES (?, ?, ?, ?)"
+  ),
+  getActiveMerge: db.prepare(
+    "SELECT * FROM emoji_merges WHERE user_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1"
+  ),
+  getMergeById: db.prepare('SELECT * FROM emoji_merges WHERE id = ?'),
+  closeMerge: db.prepare(
+    "UPDATE emoji_merges SET status = ?, emoji_key = ? WHERE id = ?"
+  ),
+  setMergeFinishNow: db.prepare(
+    'UPDATE emoji_merges SET finishes_at = ? WHERE id = ?'
+  ),
+  getFinishedPendingMerges: db.prepare(
+    "SELECT * FROM emoji_merges WHERE status = 'pending' AND finishes_at <= ?"
+  ),
+  insertUnlockedEmoji: db.prepare(
+    'INSERT OR IGNORE INTO unlocked_emojis (user_id, emoji_key) VALUES (?, ?)'
+  ),
+  getUnlockedEmoji: db.prepare(
+    'SELECT * FROM unlocked_emojis WHERE user_id = ? AND emoji_key = ?'
+  ),
+  getUnlockedEmojis: db.prepare(
+    'SELECT emoji_key FROM unlocked_emojis WHERE user_id = ?'
+  ),
+
   // ── Push notification opt-in ───────────────────────────────────────────────
   setUserWriteAccess: db.prepare(
     'UPDATE users SET allows_write_to_pm = 1 WHERE id = ?'
@@ -583,6 +689,65 @@ const stmts = {
     JOIN users u ON u.id = rms.user_id
     WHERE rms.room_id = ? AND rms.user_id != ? AND u.allows_write_to_pm = 1
   `),
+
+  // ── Achievements ─────────────────────────────────────────────────────────────
+  getEarnedAchievements: db.prepare(
+    'SELECT achievement_id FROM user_achievements WHERE user_id = ?'
+  ),
+  insertUserAchievement: db.prepare(
+    'INSERT OR IGNORE INTO user_achievements (user_id, achievement_id) VALUES (?, ?)'
+  ),
+  getUserStats: db.prepare(
+    'SELECT * FROM user_stats WHERE user_id = ?'
+  ),
+  upsertUserStats: db.prepare(
+    'INSERT OR IGNORE INTO user_stats (user_id) VALUES (?)'
+  ),
+  statMineFind: db.prepare(
+    'UPDATE user_stats SET mine_finds = mine_finds + 1, consecutive_mine_fails = 0 WHERE user_id = ?'
+  ),
+  statMineFail: db.prepare(
+    'UPDATE user_stats SET consecutive_mine_fails = consecutive_mine_fails + 1 WHERE user_id = ?'
+  ),
+  statLootbox: db.prepare(
+    'UPDATE user_stats SET lootboxes_total = lootboxes_total + 1 WHERE user_id = ?'
+  ),
+  statLootboxCommon: db.prepare(
+    'UPDATE user_stats SET consecutive_common_boxes = consecutive_common_boxes + 1 WHERE user_id = ?'
+  ),
+  statLootboxNotCommon: db.prepare(
+    'UPDATE user_stats SET consecutive_common_boxes = 0 WHERE user_id = ?'
+  ),
+  statPromptLoss: db.prepare(
+    'UPDATE user_stats SET prompt_losses = prompt_losses + 1 WHERE user_id = ?'
+  ),
+  statMarketBuy: db.prepare(
+    'UPDATE user_stats SET market_buys = market_buys + 1 WHERE user_id = ?'
+  ),
+  statMarketSell: db.prepare(
+    'UPDATE user_stats SET market_sells = market_sells + 1 WHERE user_id = ?'
+  ),
+  statLotteryBet: db.prepare(
+    'UPDATE user_stats SET lottery_bets_total = lottery_bets_total + 1 WHERE user_id = ?'
+  ),
+  statLotteryParticipate: db.prepare(
+    'UPDATE user_stats SET lottery_participations = lottery_participations + 1 WHERE user_id = ?'
+  ),
+  statLotteryBetsInRound: db.prepare(
+    'UPDATE user_stats SET lottery_bets_in_round = MAX(lottery_bets_in_round, ?) WHERE user_id = ?'
+  ),
+  statLotteryWin: db.prepare(
+    'UPDATE user_stats SET lottery_wins = lottery_wins + 1 WHERE user_id = ?'
+  ),
+  statPromptWin: db.prepare(
+    'UPDATE user_stats SET prompt_wins = prompt_wins + 1 WHERE user_id = ?'
+  ),
+  statPromptCorrectVote: db.prepare(
+    'UPDATE user_stats SET prompt_correct_votes = prompt_correct_votes + 1 WHERE user_id = ?'
+  ),
+  getVotersForReply: db.prepare(
+    'SELECT voter_id FROM prompt_votes WHERE reply_id = ?'
+  ),
 };
 
 /**
