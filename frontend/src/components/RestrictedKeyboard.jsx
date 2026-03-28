@@ -26,9 +26,10 @@ import React, { useState, useCallback, useMemo } from 'react';
 // Characters that use the shared _numbers inventory pool (0-9)
 const NUMBER_ROW  = ['1','2','3','4','5','6','7','8','9','0'];
 // Characters that use the shared _symbols inventory pool — must match backend SYMBOL_CHARS
-const SYMBOL_CHARS = '!?.,:-()@#&*';
-const SYMBOL_ROW1 = ['!','?','.',',',':','-'];
-const SYMBOL_ROW2 = ['(',')',  '@','#','&','*'];
+const SYMBOL_CHARS = '!?.,:-()@#&*;<>+~$%/^';
+const SYMBOL_ROW1 = ['!','?','.',',',':','-',';'];
+const SYMBOL_ROW2 = ['(',')', '@','#','&','*','+'];
+const SYMBOL_ROW3 = ['<','>','~','$','%','/','\^'];
 
 // Sentinel keys that toggle the layout – never appended to draft
 const MODE_TO_SYMBOLS = '123';
@@ -47,7 +48,8 @@ const SYMBOL_ROWS = [
   NUMBER_ROW,
   SYMBOL_ROW1,
   SYMBOL_ROW2,
-  [MODE_TO_LETTERS, '⌫', ' ', '↵'],
+  [...SYMBOL_ROW3, '⌫'],
+  [MODE_TO_LETTERS, ' ', '↵'],
 ];
 
 const SPECIAL_LABELS = {
@@ -85,6 +87,8 @@ export default function RestrictedKeyboard({
   inventory     = {},
   lockedLetters = [],
   disabled      = false,
+  onForgeOpen   = null,   // () => void  — opens the EmojiForgeModal
+  unlockedEmojis = [],    // string[]    — emoji chars user has unlocked
 }) {
   const [mode, setMode]   = useState('letters'); // 'letters' | 'symbols'
   const [caps, setCaps]   = useState(false);
@@ -119,7 +123,18 @@ export default function RestrictedKeyboard({
     if (key === MODE_TO_SYMBOLS) { setMode('symbols'); return; }
     if (key === MODE_TO_LETTERS) { setMode('letters'); return; }
     if (key === MODE_CAPS) { setCaps(c => !c); return; }
-    if (key === '⌫') { onDraftChange(draft.slice(0, -1)); return; }
+    if (key === '⌫') {
+      // Use Segmenter when available (handles emoji + ZWJ sequences);
+      // fall back to spreading into code-points so surrogate pairs are removed as one unit.
+      if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+        const segs = [...new Intl.Segmenter().segment(draft)].map((s) => s.segment);
+        onDraftChange(segs.slice(0, -1).join(''));
+      } else {
+        const chars = [...draft]; // spread = code-points, not code-units
+        onDraftChange(chars.slice(0, -1).join(''));
+      }
+      return;
+    }
     if (key === '↵') { if (draft.trim().length > 0) onSend(); return; }
     if (getDisableReason(key)) return;
     onDraftChange(draft + (caps ? key.toUpperCase() : key));
@@ -130,6 +145,46 @@ export default function RestrictedKeyboard({
       className="w-full bg-tg-bg-sec px-1 pb-2 pt-1 select-none overflow-hidden"
       style={{ touchAction: 'manipulation' }}
     >
+      {/* ── Emoji forge / unlocked emoji quick-access bar ───────────────────── */}
+      {(onForgeOpen || unlockedEmojis.length > 0) && (
+        <div className="flex items-center gap-1 mb-1 px-0.5">
+          {onForgeOpen && (
+            <button
+              type="button"
+              onPointerDown={(e) => { e.preventDefault(); onForgeOpen(); }}
+              className="flex items-center gap-1 bg-tg-button/15 text-tg-button
+                         rounded-lg px-2 py-1 text-xs font-semibold active:brightness-90
+                         shrink-0"
+            >
+              🧪
+            </button>
+          )}
+          {/* Unlocked emoji chips — tap to insert; each emoji usable once per draft */}
+          <div className="flex gap-1 overflow-x-auto no-scrollbar flex-1 min-w-0">
+            {unlockedEmojis.map((em, i) => {
+              const alreadyUsed = draft.includes(em);
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    if (!disabled && !alreadyUsed) onDraftChange(draft + em);
+                  }}
+                  className={`text-lg w-9 h-8 flex items-center justify-center
+                             rounded-lg shadow-sm shrink-0 transition-opacity
+                    ${alreadyUsed
+                      ? 'bg-gray-200 opacity-40 cursor-not-allowed'
+                      : 'bg-white active:scale-95'}`}
+                >
+                  {em}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {activeRows.map((row, ri) => (
         <div key={ri} className="flex justify-center gap-0.5 mb-1">
           {row.map((key) => {
