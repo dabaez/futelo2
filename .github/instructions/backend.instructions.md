@@ -31,7 +31,7 @@ module.exports = {
   ],
   MAX_LETTER_LEVEL:     6,
   CAP_OVERFLOW_COINS_PER_LETTER: 15,
-  SYMBOL_CHARS:         '!?.,:-()@#&*',
+  SYMBOL_CHARS:         '!?.,:-()@#&*;<>+~$%/^',
 
   // ── Prompts ──
   PROMPT_DURATION_SEC:  60 * 60,
@@ -66,11 +66,18 @@ module.exports = {
 
   // ── Letter mines ──
   PICKAXE_COST:       150,
-  PICKAXE_COST_SCALE: 2,
+  PICKAXE_COST_SCALE: 1,
   PICKAXE_HITS:       1000,
   MINE_HIT_CHANCE:    0.01,
 
-  PROMPT_POOL: [ /* 20 Spanish questions */ ],
+  // ── Emoji Forge ──
+  EMOJI_MERGE_DURATION_SEC:  60 * 60,   // 1 hour
+  EMOJI_INSTANT_COST_PER_SEC: 0.02,     // ceil(secsLeft * 0.02) coins to skip
+  HINT_COST:          20,               // coins for one crypt hint
+  EMOJI_RECIPES:      [ /* key, emoji, name, recipes[][], hint */ ],
+
+  PROMPT_POOL: [ /* Spanish questions */ ],
+  GAMBLING_ERRORS: [ /* humorous error messages */ ],
 };
 ```
 
@@ -93,7 +100,7 @@ picks up new values on next page load via `GET /api/config`.
 - **better-sqlite3** – fully synchronous, single-writer SQLite.
 - WAL mode + `synchronous = NORMAL`.
 - DB file: `../../data/futelo.db` relative to `database.js` (i.e. `futelo/data/futelo.db`).
-- **Current schema version: 10** (migrations v1–v10 applied automatically on startup).
+- **Current schema version: 17** (migrations v1–v17 applied automatically on startup).
 
 ### Tables
 
@@ -113,6 +120,10 @@ picks up new values on next page load via `GET /api/config`.
 | `lottery_rounds` | One row per gambling round. `status`: `active` / `closed`. Has `room_id`. |
 | `lottery_bets` | Multiple bets per user per round. Columns: `round_id`, `user_id`, `letter`. |
 | `notifications` | Persistent per-user toast queue. `delivered=0` until drained. Pruned 7 days after delivery. |
+| `emoji_merges` | Active and completed forge merges. Columns: `id`, `user_id`, `ingredients_json`, `finish_at`, `status` (`pending`/`done`/`refunded`), `result_emoji`. (migration v14) |
+| `unlocked_emojis` | Global per-user emoji unlocks. Columns: `user_id`, `emoji`. Unique `(user_id, emoji)`. (migration v15) |
+| `user_stats` | Aggregate counters per user. Columns: `user_id` (PK), `msgs_sent`, `coins_earned`, `rolls_done`, `mines_done`, `markets_done`, `lotteries_won`, `prompts_answered`, `emojis_forged`. (migration v16) |
+| `user_achievements` | Earned achievements. Columns: `user_id`, `achievement_id`. Unique `(user_id, achievement_id)`. (migration v17) |
 
 ### Prepared Statements
 
@@ -269,6 +280,31 @@ Heat sources: catch events (`+BM_HEAT_CATCH_INCREMENT`), chat mention of "mercad
 
 ---
 
+## Emoji Forge Engine (`backend/src/engine/emojiForge.js`)
+
+- `startMerge(userId, ingredients)` — deducts ingredient levels from inventory (one level each), inserts an `emoji_merges` row with `finish_at = now + EMOJI_MERGE_DURATION_SEC`. Throws if user already has an active merge or lacks ingredients.
+- `instantComplete(userId)` — pays `EMOJI_INSTANT_COST_PER_SEC × remaining_seconds` coins to finish the active merge immediately.
+- `buyHint(userId, mergeId)` — pays `HINT_COST` coins, returns the hint string for the matching recipe (or a generic message if no match).
+- `getStatus(userId)` — returns `{ active: mergeRow | null, unlocked: [emoji, …] }`.
+- `processFinishedMerges()` — called every minute by scheduler; resolves all `finish_at <= now` pending merges → recipe match → `unlocked_emojis` upsert + coin prize, or full refund on no match.
+- `matchRecipe(ingredients)` — pure helper; returns the matching `EMOJI_RECIPES` entry or `null`.
+- `inventoryKey(char)` — maps a character to its inventory key (`a`-`z`, digit, or symbol escaped with `s_` prefix).
+
+All writes in `db.transaction()`.
+
+---
+
+## Achievement Engine (`backend/src/engine/achievements.js`)
+
+- `checkAchievements(userId, roomId, event, data)` — evaluates all candidate achievements for the given event, awards any newly-met ones (coins + `user_achievements` insert), and updates `user_stats` counters. All in a single `db.transaction()`. Returns array of awarded achievement objects `{ id, label, coins }`.
+- `backfillAchievements(userId, roomId)` — runs every event type against current stats; useful on first login or after stat migration.
+- **Events**: `message`, `roll`, `mine_swing`, `market_buy`, `market_sell`, `lottery_win`, `prompt_reply`, `emoji_forged`.
+- **Stat counters updated per event**: `msgs_sent`, `rolls_done`, `mines_done`, `markets_done`, `lotteries_won`, `prompts_answered`, `emojis_forged`.
+- **Categories**: messages, coins, rolls, mines, market, lottery, prompts, emoji forge. ~50 achievement entries in `ACHIEVEMENTS` map inside the file.
+- `checkAchievements` is called from the relevant HTTP handlers in `server.js` after the primary action succeeds.
+
+---
+
 ## Bot (`backend/src/bot/bot.js`)
 
 - Skipped when `DEV_MODE=true` and no `BOT_TOKEN` is set.
@@ -319,6 +355,11 @@ All endpoints in `server.js`. Auth sent as `x-init-data` header or `body.initDat
 | POST | `/api/mine/buy` | initData | Buy a pickaxe |
 | POST | `/api/mine/swing` | initData | Swing once |
 | POST | `/api/notifications/enable` | initData | Set `allows_write_to_pm = 1` |
+| POST | `/api/forge/start` | initData | Start a merge `{ ingredients: [char, …] }` |
+| POST | `/api/forge/instant` | initData | Instant-complete active merge (pays coins) |
+| POST | `/api/forge/hint` | initData | Buy a hint for active merge `{ mergeId }` |
+| GET | `/api/forge/status` | initData | Active merge + unlocked emojis |
+| GET | `/api/achievements` | initData | All achievements with `earned` flag |
 
 ---
 
@@ -367,6 +408,8 @@ All endpoints in `server.js`. Auth sent as `x-init-data` header or `body.initDat
 | `bm_caught` | `{ letter, fine, listingId }` |
 | `bm_listing_expired` | `{ letter, listingId }` |
 | `notification` | `{ text, type }` |
+| `emoji_complete` | `{ emoji, coins }` — forge finished (recipe match) or `{ refunded: true }` (no match) |
+| `achievement_unlocked` | `{ id, label, description, coins }` — fired for each newly earned achievement |
 
 ---
 
@@ -374,7 +417,7 @@ All endpoints in `server.js`. Auth sent as `x-init-data` header or `body.initDat
 
 - Config: `backend/jest.config.js` (`testEnvironment: 'node'`, `maxWorkers: 1`)
 - Run: `cd backend && npm test`
-- **213 tests across 8 suites** (all passing)
+- **280 tests across 10 suites** (all passing)
 
 | File | Tests | What it covers |
 |---|---|---|
@@ -386,6 +429,8 @@ All endpoints in `server.js`. Auth sent as `x-init-data` header or `body.initDat
 | `src/__tests__/prompt.test.js` | 22 | `buyPrompt`, `submitReply` (incl. username sourced from users table), `castVote`, `closePrompt` |
 | `src/__tests__/lottery.test.js` | 14 | `startLottery`, `placeBet`, `closeLottery`, carry-over |
 | `src/__tests__/api.test.js` | 64 | All REST endpoints end-to-end with temp SQLite DB; `my-listings` open-only regression |
+| `src/__tests__/emojiForge.test.js` | 27 | `inventoryKey`, `matchRecipe`, `startMerge` (7 cases), `instantComplete` (4), `buyHint` (3), `getStatus` (2) |
+| `src/__tests__/achievements.test.js` | 40 | Already-earned guard, stat counter updates, all 8 event types, transaction integrity |
 
 **Key patterns:**
 - `FUTELO_DATA_DIR` env override — temp directory per test run.

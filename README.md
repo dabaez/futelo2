@@ -238,7 +238,29 @@ Después de cerrar prompts y rondas de lotería, el servidor publica un mensaje 
 
 El mensaje de **pedir ayuda** ("🙏 Pedir ayuda" en la tienda cuando el jugador no tiene letras ni monedas) también se publica como mensaje de sistema persistente con un payload JSON `{type:"beg", ...}`. El feed lo renderiza como una tarjeta ámbar con un botón **Dar 10 🪙** — así todos los jugadores, incluyendo los que se conecten después, pueden donar.
 
-El mensaje de **pedir ayuda** ("🙏 Pedir ayuda" en la tienda cuando el jugador no tiene letras ni monedas) también se publica como mensaje de sistema persistente con un payload JSON `{type:"beg", ...}`. El feed lo renderiza como una tarjeta ámbar con un botón **Dar 10 🪙** — así todos los jugadores, incluyendo los que se conecten después, pueden donar.
+### Emoji Forge
+
+Un taller de creación de emojis:
+
+- Abre la interfaz desde el botón 🧪 en el teclado.
+- Elige entre 2 y 6 caracteres del inventario como "ingredientes".
+- El nivel de cada ingrediente queda reservado durante 1 hora mientras la mezcla está activa.
+- Si la combinación coincide con una receta conocida, el emoji queda **desbloqueado permanentemente** y usable en cualquier sala.
+- Si no hay receta, los niveles se devuelven (+1 por ingrediente, máx. `MAX_LETTER_LEVEL`).
+- **Completar al instante**: paga `ceil(segundos_restantes × 0.02) 🪙`.
+- **Pista**: compra una pista críptica por 20 🪙 sobre un emoji que aún no tienes.
+- Una vez desbloqueado, el emoji aparece en la barra rápida del teclado para insertarlo con un toque.
+- Solo una mezcla activa a la vez (global, no por sala).
+
+### Achievements (Logros)
+
+Sistema de logros que recompensa hitos del juego con monedas.
+
+- 50+ logros distribuidos en categorías: Mensajes, Teclado, Tienda, Mercado, Mina, Apuestas, Emojis, Community.
+- Se otorgan automáticamente cuando se cumple la condición (tras cada acción relevante).
+- El premio se acredita en la sala donde ocurrió el evento.
+- Los logros ya ganados no se repiten.
+- Ver el panel de logros desde el icono 🏅 en el header.
 
 ### Notifications
 
@@ -249,8 +271,8 @@ Las alertas por usuario (p.ej. "tu letra se vendió") se **persisten en la DB**.
 ## Tests
 
 ```bash
-cd backend && npm test   # Jest + supertest  (213 tests, 8 suites)
-cd frontend && npm test  # Vitest + Testing Library  (52 tests, 2 suites)
+cd backend && npm test   # Jest + supertest  (280 tests, 10 suites)
+cd frontend && npm test  # Vitest + Testing Library  (55 tests, 2 suites)
 ```
 
 ### Backend test suites
@@ -265,10 +287,12 @@ cd frontend && npm test  # Vitest + Testing Library  (52 tests, 2 suites)
 | `prompt.test.js` | 21 | `buyPrompt`, `submitReply`, `castVote`, `closePrompt` with all edge cases |
 | `lottery.test.js` | 14 | `startLottery`, `placeBet`, `closeLottery`, `getActiveLottery`, cap overflow coins |
 | `api.test.js` | 64 | All REST endpoints end-to-end with a real SQLite DB; includes regression for `my-listings` open-only filter |
+| `emojiForge.test.js` | 27 | `inventoryKey`, `matchRecipe`, `startMerge` (validation + deduction), `instantComplete`, `buyHint`, `getStatus` |
+| `achievements.test.js` | 40 | `checkAchievements` – all event types, already-earned guard, multi-award transaction, stat counter updates |
 
 ### Frontend test suites
 
 | Suite | Tests | What it covers |
 |-------|-------|---------------|
-| `RestrictedKeyboard.test.jsx` | 25 | Rendering, badges, disabled states, pointer interactions, caps/shift toggle |
+| `RestrictedKeyboard.test.jsx` | 28 | Rendering, badges, disabled states, pointer interactions, caps/shift toggle, all 22 symbol keys, ⌫ position stability across modes |
 | `MessageBubble.test.jsx` | 27 | Text, sender names, coin delta badges, tier labels, layout, miso-soup replacement, system pill, beg card + socket interaction |

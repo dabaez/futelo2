@@ -34,10 +34,12 @@ App.jsx
  ├── useSocket(initData)          ← socket, connected, sendMessage()
  ├── ChatFeed                     ← chatId prop; reads socket for new_message events
  ├── PromptBanner                 ← prompt, promptReplies, replyMode, handleVote
- ├── RestrictedKeyboard           ← reads inventory + lockedLetters from user
+ ├── RestrictedKeyboard           ← reads inventory + lockedLetters from user; onForgeOpen + unlockedEmojis props
  ├── ShopModal                    ← chatId prop; lootbox roll + P2P market + prompt + mines
  ├── BlackMarketModal             ← chatId prop; secret P2P market (triple-tap)
- └── LotteryModal                 ← chatId prop; gambling round (auto-opens on new_lottery)
+ ├── LotteryModal                 ← chatId prop; gambling round (auto-opens on new_lottery)
+ ├── EmojiForgeModal              ← isOpen, onClose, initData, chatId, coins, inventory, socket, onPurchase, onEmojiInsert, currentDraft
+ └── AchievementsModal            ← isOpen, onClose, initData, chatId
 ```
 
 **Triple-tap secret (black market):** `handleShopClick` in `App.jsx` uses
@@ -67,6 +69,8 @@ Socket events handled in `App.jsx`:
 - `prompt_closed` → clears `prompt`, shows winner toast
 - `prompt_error` → shows error in PromptBanner
 - `new_lottery` / `lottery_bet_placed` / `lottery_closed`
+- `emoji_complete` → updates `unlockedEmojis` state, shows forge result toast
+- `achievement_unlocked` → shows achievement toast (one per achievement, 6 s)
 - Beg messages arrive as `new_message` (system message with JSON `{type:"beg",...}` payload); rendered as amber cards by `MessageBubble`
 
 ---
@@ -127,6 +131,32 @@ Haptic on strip land: `legendario` → `notificationOccurred('success')`;
 
 `rollResult` shape: `{ letters: string[], rarity: string, coinBonus?: number, allCapped?: boolean }`
 — **not a bare array**. Access letters via `rollResult.letters`.
+
+---
+
+## EmojiForgeModal
+
+Two-tab bottom-sheet (`🧪 Forja` + `😊 Emojis`).
+
+**Forja tab** — ingredient picker with 3 row groups: letter rows (A-Z + Ñ), symbol row (`SYMBOL_CHARS`), number row. Max 4 ingredients. Selected chips shown above. Actions:
+- **Forjar**: calls `POST /api/forge/start`, disables ingredient picker while merge is running.
+- **Completar** (instant): `POST /api/forge/instant` — pays per-second cost; enabled only during active merge.
+- **Pista**: `POST /api/forge/hint` — shows hint toast; costs `HINT_COST` coins.
+- Active merge countdown timer (re-rendered via `setInterval(1000)`).
+
+**Emojis tab** — grid of all 12 forgeable emojis. Unlocked items shown in full colour; locked items shown at reduced opacity with 🔒. Clicking an unlocked emoji calls `onEmojiInsert(emoji)` → appended to draft.
+
+**`SYMBOL_CHARS`** in this file must stay in sync with `config.js` and `RestrictedKeyboard.jsx`. Current value: `'!?.,:-()@#&*;<>+~$%/^'` (22 chars).
+
+`onPurchase` called with `{ newCoins }` after successful instant-complete or hint purchase.
+
+---
+
+## AchievementsModal
+
+Bottom-sheet gallery of all achievements grouped by category. Each item shows: icon emoji, label, description, coin reward, and `✅` or `🔒` earned status.
+
+Data comes from `GET /api/achievements` (returns all achievements with `earned: true/false`). Fetched on modal open (`useEffect` on `isOpen`).
 
 ---
 
@@ -194,11 +224,11 @@ An amber banner is shown in chat with a "**cambiar**" link to reset back to the 
 
 - Config: `test:` block in `frontend/vite.config.js` (`environment: 'jsdom'`)
 - Run: `cd frontend && npm test`
-- **52 tests across 2 suites** (all passing)
+- **55 tests across 2 suites** (all passing)
 
 | File | Tests | What it covers |
 |---|---|---|
-| `src/__tests__/RestrictedKeyboard.test.jsx` | 24 | Rendering, badges, disabled states, pointer interactions, caps/shift toggle |
+| `src/__tests__/RestrictedKeyboard.test.jsx` | 28 | Rendering, badges, disabled states, pointer interactions, caps/shift toggle; all 22 symbol chars in symbol mode; ⌫ position stability across modes |
 | `src/__tests__/MessageBubble.test.jsx` | 27 | Text, sender names, coin delta badges, tier labels, layout, miso-soup replacement, system pill, beg card + socket interaction |
 
 **Key patterns:**
