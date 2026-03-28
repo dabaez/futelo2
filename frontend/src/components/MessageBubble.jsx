@@ -44,7 +44,21 @@ function formatTime(unixSec) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-export default function MessageBubble({ message, isOwn, socket }) {
+export default function MessageBubble({ message, isOwn, socket, myReaction, onReact }) {
+  const [reactionMenuOpen, setReactionMenuOpen] = React.useState(false);
+  const holdTimerRef = React.useRef(null);
+
+  function startHold(e) {
+    // Only trigger on primary pointer (not right-click)
+    if (e.button !== undefined && e.button !== 0) return;
+    holdTimerRef.current = setTimeout(() => setReactionMenuOpen(true), 400);
+  }
+  function cancelHold() {
+    clearTimeout(holdTimerRef.current);
+  }
+  function closeMenu() {
+    setReactionMenuOpen(false);
+  }
   // System messages (userId === 0): check for structured beg payload first
   if (message.userId === 0) {
     let parsed = null;
@@ -105,21 +119,68 @@ export default function MessageBubble({ message, isOwn, socket }) {
           </span>
         )}
 
-        {/* Bubble */}
+        {/* Bubble — long-press to reveal reactions (other messages only) */}
         <div
           className={`
-            relative px-3 py-2 rounded-2xl shadow-sm text-sm leading-snug
+            relative px-3 py-2 rounded-2xl shadow-sm text-sm leading-snug select-none
             ${isOwn
               ? 'bg-tg-button text-tg-btn-text rounded-tr-sm'
               : 'bg-tg-bg-sec text-tg-text rounded-tl-sm'}
           `}
+          onPointerDown={(!isOwn && !myReaction) ? startHold : undefined}
+          onPointerUp={(!isOwn && !myReaction) ? cancelHold : undefined}
+          onPointerLeave={(!isOwn && !myReaction) ? cancelHold : undefined}
+          onPointerCancel={(!isOwn && !myReaction) ? cancelHold : undefined}
+          onContextMenu={(e) => { if (!isOwn) e.preventDefault(); }}
         >
-          <span className="whitespace-pre-wrap break-words">{replaceMiso(message.text)}</span>
+          <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">{replaceMiso(message.text)}</span>
 
           {/* Timestamp tail */}
           <span className={`ml-2 text-[10px] align-bottom select-none ${isOwn ? 'text-blue-200' : 'text-tg-hint'}`}>
             {formatTime(message.createdAt)}
           </span>
+
+          {/* Reaction count badges — always visible when non-zero */}
+          {(message.likes > 0 || message.dislikes > 0) && (
+            <div className="flex gap-1 mt-1">
+              {message.likes > 0 && (
+                <span className={`text-[11px] px-1.5 py-0.5 rounded-full ${myReaction === 'like' ? 'bg-tg-button text-tg-btn-text' : 'bg-black/10 text-tg-text'}`}>
+                  👍 {message.likes}
+                </span>
+              )}
+              {message.dislikes > 0 && (
+                <span className={`text-[11px] px-1.5 py-0.5 rounded-full ${myReaction === 'dislike' ? 'bg-red-500 text-white' : 'bg-black/10 text-tg-text'}`}>
+                  👎 {message.dislikes}
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Reaction picker popup — shown on long-press */}
+          {reactionMenuOpen && (
+            <>
+              {/* Backdrop to dismiss */}
+              <div className="fixed inset-0 z-40" onPointerDown={closeMenu} />
+              <div className={`absolute z-50 bottom-full mb-2 flex gap-1 bg-tg-bg border border-tg-bg-sec rounded-2xl shadow-lg px-2 py-1.5 ${isOwn ? 'right-0' : 'left-0'}`}>
+                <button
+                  aria-label="like"
+                  onPointerDown={(e) => { e.stopPropagation(); onReact?.(message.id, 'like'); closeMenu(); }}
+                  className={`text-xl px-2 py-1 rounded-xl transition-colors active:scale-110
+                    ${myReaction === 'like' ? 'bg-tg-button/20' : 'hover:bg-tg-bg-sec'}`}
+                >
+                  👍
+                </button>
+                <button
+                  aria-label="dislike"
+                  onPointerDown={(e) => { e.stopPropagation(); onReact?.(message.id, 'dislike'); closeMenu(); }}
+                  className={`text-xl px-2 py-1 rounded-xl transition-colors active:scale-110
+                    ${myReaction === 'dislike' ? 'bg-red-500/20' : 'hover:bg-tg-bg-sec'}`}
+                >
+                  👎
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Economy badge */}
@@ -135,6 +196,7 @@ export default function MessageBubble({ message, isOwn, socket }) {
             )}
           </div>
         )}
+
       </div>
     </div>
   );

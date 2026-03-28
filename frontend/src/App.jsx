@@ -456,7 +456,7 @@ export default function App() {
       )}
 
       {/* ── Chat feed ──────────────────────────────────────────────────── */}
-      <ChatFeed socket={socket} myUserId={user?.id} chatId={chatId} />
+      <ChatFeed socket={socket} myUserId={user?.id} chatId={chatId} initData={initData} />
 
       {/* ── Error bar ──────────────────────────────────────────────────── */}
       {sendError && (
