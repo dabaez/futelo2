@@ -4,7 +4,7 @@ import React from 'react';
  * Top header bar – displays the Futelo logo, coin balance, and connection
  * indicator on a single row.
  */
-export default function Header({ coins, connected, onShopOpen, onLotteryOpen, hasActiveLottery }) {
+export default function Header({ coins, connected, onShopOpen, onLotteryOpen, hasActiveLottery, onAchievementsOpen }) {
   return (
     <header className="flex items-center justify-between px-3 py-2 bg-tg-bg border-b border-tg-bg-sec">
       {/* Brand */}
@@ -21,6 +21,13 @@ export default function Header({ coins, connected, onShopOpen, onLotteryOpen, ha
           <span className="text-sm">🪙</span>
           <span className="text-sm font-bold text-tg-text">{coins ?? '…'}</span>
         </div>
+        <button
+          onClick={onAchievementsOpen}
+          className="bg-tg-bg-sec text-tg-text text-xs font-semibold px-3 py-1.5 rounded-full active:opacity-80 transition-opacity"
+          aria-label="Logros"
+        >
+          🏆
+        </button>
         <button
           onClick={onLotteryOpen}
           className={`text-xs font-semibold px-3 py-1.5 rounded-full active:opacity-80 transition-opacity relative

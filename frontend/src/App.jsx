@@ -7,6 +7,8 @@ import BlackMarketModal   from './components/BlackMarketModal.jsx';
 import LotteryModal       from './components/LotteryModal.jsx';
 import PromptBanner       from './components/PromptBanner.jsx';
 import DevUserPicker      from './components/DevUserPicker.jsx';
+import EmojiForgeModal    from './components/EmojiForgeModal.jsx';
+import AchievementsModal  from './components/AchievementsModal.jsx';
 import { useAuth }        from './hooks/useAuth.js';
 import { useSocket }      from './hooks/useSocket.js';
 
@@ -49,7 +51,12 @@ export default function App() {
   const [shopOpen,  setShopOpen]  = useState(false);
   const [bmOpen,    setBmOpen]    = useState(false);
   const [lotteryOpen, setLotteryOpen] = useState(false);
+  const [forgeOpen,   setForgeOpen]   = useState(false);
+  const [achievementsOpen, setAchievementsOpen] = useState(false);
   const [toast,     setToast]     = useState(null); // { text, type }
+
+  // ── Emoji forge state ────────────────────────────────────────────────────
+  const [unlockedEmojis, setUnlockedEmojis] = useState([]); // string[] of emoji chars
 
   // Triple-tap detection for secret black market
   const shopClicksRef  = useRef(0);
@@ -97,6 +104,24 @@ export default function App() {
       .then((data) => setLotteryCfg(data))
       .catch(() => {});
   }, [chatId]);
+
+  // Hydrate unlocked emojis once we have a session
+  useEffect(() => {
+    if (!initData || !chatId) return;
+    const base = import.meta.env.VITE_BACKEND_URL || '';
+    fetch(`${base}/api/emoji/status`, { headers: { 'x-init-data': initData } })
+      .then((r) => r.json())
+      .then((data) => {
+        const keys    = data.unlockedEmojis || [];
+        const EMOJI_MAP = {
+          happy:'😊', sad:'😢', tongue:'😛', laugh:'😂', cool:'😎',
+          wink:'😉',  cry:'😭', angry:'😠', love:'🥰',  rofl:'🤣',
+          star:'🤩',  think:'🤔',
+        };
+        setUnlockedEmojis(keys.map((k) => EMOJI_MAP[k]).filter(Boolean));
+      })
+      .catch(() => {});
+  }, [initData, chatId]);
 
   // ── Show toast notifications for economy events ─────────────────────────
   useEffect(() => {
@@ -225,6 +250,20 @@ export default function App() {
 
     socket.on('notification', onNotification);
 
+    // ── Emoji forge: update unlocked list when a merge completes ────────
+    const EMOJI_MAP = {
+      happy:'😊', sad:'😢', tongue:'😛', laugh:'😂', cool:'😎',
+      wink:'😉',  cry:'😭', angry:'😠', love:'🥰',  rofl:'🤣',
+      star:'🤩',  think:'🤔',
+    };
+    const onEmojiComplete = (result) => {
+      if (result.success && result.emoji?.key && !result.alreadyHad) {
+        const char = EMOJI_MAP[result.emoji.key];
+        if (char) setUnlockedEmojis((prev) => prev.includes(char) ? prev : [...prev, char]);
+      }
+    };
+    socket.on('emoji_complete', onEmojiComplete);
+
     return () => {
       socket.off('user_update',      onUpdate);
       socket.off('rejected_message', onRejected);
@@ -237,6 +276,7 @@ export default function App() {
       socket.off('lottery_closed',     onLotteryClosed);
       socket.off('prompt_error',      onPromptError);
       socket.off('notification',      onNotification);
+      socket.off('emoji_complete',     onEmojiComplete);
     };
   }, [socket, updateUser]);
 
@@ -397,6 +437,7 @@ export default function App() {
         onShopOpen={handleShopClick}
         onLotteryOpen={() => setLotteryOpen(true)}
         hasActiveLottery={!!lotteryRound}
+        onAchievementsOpen={() => setAchievementsOpen(true)}
       />
 
       {/* ── Dev identity banner (only shown outside Telegram) ──────────── */}
@@ -451,6 +492,25 @@ export default function App() {
         inventory={inventory}
         lockedLetters={lockedLetters}
         disabled={sending}
+        onForgeOpen={() => setForgeOpen(true)}
+        unlockedEmojis={unlockedEmojis}
+      />
+
+      {/* ── Emoji forge modal ──────────────────────────────────────────── */}
+      <EmojiForgeModal
+        isOpen={forgeOpen}
+        onClose={() => setForgeOpen(false)}
+        initData={initData}
+        chatId={chatId}
+        coins={user?.coins ?? 0}
+        inventory={inventory}
+        socket={socket}
+        onPurchase={(result) => updateUser({
+          newCoins:     result.newCoins,
+          newInventory: result.newInventory,
+        })}
+        onEmojiInsert={(em) => setDraft((d) => d + em)}
+        currentDraft={draft}
       />
 
       {/* ── Shop modal ─────────────────────────────────────────────────── */}
@@ -491,6 +551,13 @@ export default function App() {
         carryOver={lotteryCarryOver}
         onLotteryStarted={handleLotteryStarted}
         cfg={lotteryCfg}
+      />
+      {/* ── Achievements modal ──────────────────────────────────────────── */}
+      <AchievementsModal
+        isOpen={achievementsOpen}
+        onClose={() => setAchievementsOpen(false)}
+        initData={initData}
+        chatId={chatId}
       />
       {/* ── Toast notification ──────────────────────────────────────────── */}
       {toast && (
