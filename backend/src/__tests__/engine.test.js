@@ -113,11 +113,10 @@ describe('letterRequirements', () => {
   });
 
   test('ignores spaces and characters outside the inventory system', () => {
-    // '^' and '%' are not in SYMBOL_CHARS and not digits, so they are ignored
+    // '^' and '%' ARE now in SYMBOL_CHARS, so they count as _symbols
     const req = letterRequirements('hi there^%');
-    expect(req).toEqual({ h: 2, i: 1, t: 1, e: 2, r: 1 });
+    expect(req).toEqual({ h: 2, i: 1, t: 1, e: 2, r: 1, _symbols: 2 });
     expect(req[' ']).toBeUndefined();
-    expect(req['^']).toBeUndefined();
   });
 
   test('returns empty object for empty string', () => {
@@ -129,8 +128,8 @@ describe('letterRequirements', () => {
   });
 
   test('counts SYMBOL_CHARS characters into the _symbols group key', () => {
-    // '!' and '?' are in SYMBOL_CHARS; '$' and '^' are not
-    expect(letterRequirements('hola!?$^')).toEqual({ h: 1, o: 1, l: 1, a: 1, _symbols: 2 });
+    // '!', '?', '$', and '^' are all in SYMBOL_CHARS
+    expect(letterRequirements('hola!?$^')).toEqual({ h: 1, o: 1, l: 1, a: 1, _symbols: 4 });
   });
 
   test('counts letters, digits, and symbols together', () => {
@@ -138,7 +137,8 @@ describe('letterRequirements', () => {
   });
 
   test('returns empty object when text contains only ignored characters', () => {
-    expect(letterRequirements('   ^$~')).toEqual({});
+    // '^', '$', '~' are all in SYMBOL_CHARS; space is ignored
+    expect(letterRequirements('   ^$~')).toEqual({ _symbols: 3 });
   });
 
   it('counts ñ correctly', () => {

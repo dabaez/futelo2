@@ -420,4 +420,58 @@ describe('RestrictedKeyboard', () => {
     expect(idxNn).toBeGreaterThanOrEqual(0);
     expect(idxBs).toBeGreaterThan(idxNn);
   });
+
+  // ── Symbols mode – full character set ───────────────────────────────────────
+  it('renders all 22 symbol keys in symbols mode', () => {
+    render(
+      <RestrictedKeyboard
+        draft=""
+        onDraftChange={noop}
+        onSend={noop}
+        inventory={{ _symbols: 5 }}
+        lockedLetters={[]}
+      />
+    );
+    fireEvent.pointerDown(screen.getByRole('button', { name: '123' }));
+    for (const sym of '!?.,:-()@#&*;<>+~$%/^') {
+      expect(screen.getByRole('button', { name: sym })).toBeDefined();
+    }
+  });
+
+  it('⌫ appears before the ABC row in symbols mode (stable position)', () => {
+    render(
+      <RestrictedKeyboard
+        draft=""
+        onDraftChange={noop}
+        onSend={noop}
+        inventory={{ _symbols: 5 }}
+        lockedLetters={[]}
+      />
+    );
+    fireEvent.pointerDown(screen.getByRole('button', { name: '123' }));
+    const allButtons = screen.getAllByRole('button');
+    const idxBs  = allButtons.findIndex((b) => b.getAttribute('aria-label') === '⌫');
+    const idxAbc = allButtons.findIndex((b) => b.getAttribute('aria-label') === 'ABC');
+    expect(idxBs).toBeGreaterThanOrEqual(0);
+    expect(idxAbc).toBeGreaterThan(idxBs);
+  });
+
+  it('symbols mode action row contains ABC, ␣, ↵ but NOT ⌫', () => {
+    render(
+      <RestrictedKeyboard
+        draft=""
+        onDraftChange={noop}
+        onSend={noop}
+        inventory={{ _symbols: 5 }}
+        lockedLetters={[]}
+      />
+    );
+    fireEvent.pointerDown(screen.getByRole('button', { name: '123' }));
+    // ABC, ␣ and ↵ must all exist
+    expect(screen.getByRole('button', { name: 'ABC' })).toBeDefined();
+    expect(screen.getByRole('button', { name: '␣' })).toBeDefined();
+    expect(screen.getByRole('button', { name: '↵' })).toBeDefined();
+    // ⌫ itself must still exist (just not in the action row — covered by prior test)
+    expect(screen.getByRole('button', { name: '⌫' })).toBeDefined();
+  });
 });
