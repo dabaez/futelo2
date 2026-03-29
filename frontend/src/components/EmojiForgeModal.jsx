@@ -23,21 +23,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
  *   currentDraft    – string  (current message draft for duplicate guard)
  */
 
-// ── Static emoji list (mirrors backend EMOJI_RECIPES in config.js) ────────────
-const ALL_EMOJIS = [
-  { key: 'happy',  emoji: '😊', name: 'Feliz'      },
-  { key: 'sad',    emoji: '😢', name: 'Triste'     },
-  { key: 'tongue', emoji: '😛', name: 'Lengua'     },
-  { key: 'laugh',  emoji: '😂', name: 'Carcajada'  },
-  { key: 'cool',   emoji: '😎', name: 'Cool'       },
-  { key: 'wink',   emoji: '😉', name: 'Guiño'      },
-  { key: 'cry',    emoji: '😭', name: 'Llora'      },
-  { key: 'angry',  emoji: '😠', name: 'Enojado'    },
-  { key: 'love',   emoji: '🥰', name: 'Amor'       },
-  { key: 'rofl',   emoji: '🤣', name: 'ROFL'       },
-  { key: 'star',   emoji: '🤩', name: 'Estrella'   },
-  { key: 'think',  emoji: '🤔', name: 'Pensativo'  },
-];
+// ALL_EMOJIS is no longer hardcoded here — it is passed in as the `emojiDefs` prop
+// and populated from GET /api/config so config.js is the single source of truth.
 
 // Must match backend SYMBOL_CHARS
 const SYMBOL_CHARS = '!?.,:-()@#&*;<>+~$%/^';
@@ -89,7 +76,7 @@ async function safeJson(res) {
 }
 
 // ── Sub-component: celebration overlay ───────────────────────────────────────
-function CelebrationOverlay({ event, onDone }) {
+function CelebrationOverlay({ event, onDone, emojiDefs = [] }) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
@@ -102,7 +89,7 @@ function CelebrationOverlay({ event, onDone }) {
   if (!visible || !event) return null;
 
   const success = event.success;
-  const emojiDef = success ? ALL_EMOJIS.find((e) => e.key === event.emoji?.key) : null;
+  const emojiDef = success ? emojiDefs.find((e) => e.key === event.emoji?.key) : null;
 
   const sparks = success
     ? ['top-4 left-6', 'top-8 right-8', 'bottom-12 left-12', 'bottom-8 right-10',
@@ -162,6 +149,7 @@ export default function EmojiForgeModal({
   onPurchase,
   onEmojiInsert,
   currentDraft = '',
+  emojiDefs = [],
 }) {
   const [inputChars,    setInputChars]    = useState([]);        // current recipe being built
   const [activeMerge,   setActiveMerge]   = useState(null);      // pending merge from server
@@ -199,6 +187,7 @@ export default function EmojiForgeModal({
         if (!data) return;
         setActiveMerge(data.merge || null);
         setUnlockedEmojis(data.unlockedEmojis || []);
+        setHints(data.hints || []);
       })
       .catch(() => {});
   }, [isOpen, initData]);
@@ -358,7 +347,7 @@ export default function EmojiForgeModal({
            style={{ maxHeight: '88vh' }}>
 
         {/* Celebration overlay */}
-        <CelebrationOverlay event={celebEvent} onDone={() => setCelebEvent(null)} />
+        <CelebrationOverlay event={celebEvent} onDone={() => setCelebEvent(null)} emojiDefs={emojiDefs} />
 
         {/* Handle + header */}
         <div className="sticky top-0 bg-tg-bg z-10 pt-3 pb-2 px-4 border-b border-tg-bg-sec">
@@ -573,7 +562,7 @@ export default function EmojiForgeModal({
                     hintLoading={hintLoading}
                     coins={coins}
                     hintCost={hintCost}
-                    allUnlocked={unlockedEmojis.length === ALL_EMOJIS.length}
+                    allUnlocked={emojiDefs.length > 0 && unlockedEmojis.length === emojiDefs.length}
                     onHint={handleHint}
                   />
                 </div>
