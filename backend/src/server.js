@@ -227,6 +227,7 @@ app.get('/api/config', (_req, res) => {
     MINE_HIT_CHANCE:               config.MINE_HIT_CHANCE,
     // ── Emoji Forge ──
     HINT_COST:                     config.HINT_COST,
+    EMOJI_DEFS: config.EMOJI_RECIPES.map(({ key, emoji, name }) => ({ key, emoji, name })),
     // ── Black market heat (live values) ──
     BM_HEAT_MAX:            config.BM_HEAT_MAX,
     BM_BASE_CATCH_PROB:     config.BM_BASE_CATCH_PROB,
@@ -740,7 +741,7 @@ app.post('/api/reactions/:messageId', authMiddleware, (req, res) => {
     const newCount  = count + 1;
     const coinDelta = reaction === 'like' ? newCount : -newCount;
     stmts.insertMessageReaction.run(messageId, viewerId, reaction);
-    stmts.updateCoins.run(coinDelta, authorId);
+    stmts.updateRoomCoins.run(coinDelta, roomId, authorId);
 
     const counts = stmts.countMessageReactions.get(messageId);
     likes    = counts.likes;
@@ -749,8 +750,8 @@ app.post('/api/reactions/:messageId', authMiddleware, (req, res) => {
 
   io.to(`room:${roomId}`).emit('reaction_update', { messageId, likes, dislikes });
 
-  const author = requireUser(authorId);
-  io.to(`user:${authorId}`).emit('user_update', { newCoins: author.coins });
+  const authorMember = stmts.getRoomMember.get(roomId, authorId);
+  io.to(`user:${authorId}`).emit('user_update', { newCoins: authorMember.coins });
 
   res.json({ ok: true, likes, dislikes, action: 'added' });
 });
