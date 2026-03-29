@@ -191,9 +191,10 @@ module.exports = {
   HINT_COST: 20,
   /**
    * Emoji recipes. Each emoji has multiple valid ingredient sequences, so
-   * players can discover via intuition. All matching is case-insensitive for
-   * letters. Symbols use the shared _symbols pool; numbers use _numbers;
-   * letters use their individual inventory key.
+   * players can discover via intuition. Write recipes in lowercase — matching
+   * is case-insensitive (both sides are lowercased before comparison).
+   * Symbols use the shared _symbols pool; numbers use _numbers; letters use
+   * their individual inventory key.
    *
    * Available chars on the keyboard:
    *   Letters : a-z, ñ
@@ -213,17 +214,17 @@ module.exports = {
     },
     {
       key: 'tongue', emoji: '😛', name: 'Lengua',
-      recipes: [[':','P'],[':','p'],['p',':'],['P',':']],
+      recipes: [[':','p'],['p',':']],               // :p and p: (case-insensitive)
       hint: 'Bleh! Te saco la lengua. Bleh! Ojos y una lengua. Bleh!',
     },
     {
       key: 'laugh',  emoji: '😂', name: 'Carcajada',
-      recipes: [['X','D'],['x','d'],['X','d'],['x','D']],
+      recipes: [['x','d']],                         // xD (case-insensitive)
       hint: 'Este icóncio par de letras se usa para representar una risa. A pesar de que solo tiene sentido cuando son mayúsculas, la gente lo usa en minúscula igual. Incluso lo dicen en voz alta, ya no importa nada.',
     },
     {
       key: 'cool',   emoji: '😎', name: 'Cool',
-      recipes: [['B',')'],['b',')'],['8',')']],
+      recipes: [['b',')'],['8',')']],               // B) and 8) as sunglasses
       hint: 'Gafas de sol y una sonrisa. La sonrisa la tenemos clara, pero las gafas de sol se hacen de varias formas.',
     },
     {
@@ -233,12 +234,12 @@ module.exports = {
     },
     {
       key: 'cry',    emoji: '😭', name: 'Llora',
-      recipes: [['Q', 'n','Q'],['q', 'n','q'],['T', 'n', 'T'], ['t', 'n', 't']],
+      recipes: [['q','n','q'],['t','n','t']],        // QnQ and TnT (case-insensitive)
       hint: 'Dos letras repetidas se levantan alrededor de una mueca para llorar. No con simbolos, pero con letras.',
     },
     {
       key: 'angry',  emoji: '😠', name: 'Enojado',
-      recipes: [['>',':','('],[')',':','<'],['>',':','c'],['>',':','C']],
+      recipes: [['>',':','('],[')',':','<'],['>',':','c']], // angry face variants
       hint: 'Carita enojada. Es la carita triste pero con cejas enojadas. Esta pista es muy buena, cierto?',
     },
     {
@@ -250,6 +251,81 @@ module.exports = {
       key: 'think', emoji: '🤔', name: 'Pensando',
       recipes: [[':','/'],[':','\\'],['/',':'],['\\',':']],
       hint: 'Cuando estás pensando, a veces haces una mueca con la boca. Tu boca se va como a los lados... como un... slash...',
+    },
+    {
+      key: 'negative_b', emoji: '🅱️', name: 'B Negativa',
+      recipes: [['(','b',')']],                       // (b) (case-insensitive)
+      hint: 'La letra b es tan poderosa que tiene su propio emoji. Para poder contener su poder, tienes que encerrarla de alguna forma.'
+    },
+    {
+      key: 'devil', emoji: '😈', name: 'Diablito',
+      recipes: [['>',':',')'],['(',':','<'],['c',':','<']], // devil variants
+      hint: 'Hace mucho tiempo atrás, mi abuelo me contó que después de beber un par de tragos, subió la colina y se encontró con el diablo. ¿Cómo sabía que era el diablo? Su sonrisa, sus ojos, su ceño fruncido... era como una carita feliz pero con un toque malvado.',
+    },
+    {
+      key: 'fire', emoji: '🔥', name: 'Fuego',
+      recipes: [['*','*','*']],
+      hint: 'Hace mucho tiempo atrás, mi abuelo me contó que después de beber unas copas de más, subió el cerro y se encontró con un incendio. ¿Cómo sabía que era un incendio? Eran como tres columnas de fuego, una lluvia de algo como asteriscos en el cielo.',
+    },
+    {
+      key: 'mpreg', emoji: '🫃', name: 'Embarazo Masculino',
+      recipes: [['m','p','r','e','g']],
+      hint: 'En un lugar muy lejano conocido como omegaverse, los hombres omega pueden quedar embarazados por sus parejas alpha. Para representar este concepto, hay un tag de letras que se unen para formar un emoji de embarazo masculino.',
+    },
+    {
+      key: 'preg', emoji: '🤰', name: 'Embarazo Femenino',
+      recipes: [['f','m','p','r','e','g']],
+      hint: 'Puede que seas familiar con el concepto de mpreg, que es cuando un hombre queda embarazado. Pero ahora imaginate hicieramos algo loco y tuvieramos a una mujer mpreg. Algo como female-mpreg. Como podriamos abreviar esto...'
+    },
+    {
+      key: 'eggplant', emoji: '🍆', name: 'Berenjena',
+      recipes: [['p','e','n','e']],
+      hint: 'El emoji de berenjena nunca se ha tratado de la verdura. Se trata de otra cosa. 4 letras. Empieza con p. No me hagas decirlo.'
+    },
+    {
+      key: 'money', emoji: '💵', name: 'Dinero',
+      recipes: [['$']],
+      hint: 'Dinero. Hay literalmente un signo para esto. Nada mas que eso. Se acabo la pista.'
+    },
+    {
+      key: 'money_bag', emoji: '💰', name: 'Bolsa de Dinero',
+      recipes: [['(', '$', ')']],
+      hint: 'No se si has escuchado del emoji de dinero. Bueno, hay otro. Es una bolsa de dinero. Solo tienes que poner el dinero dentro de la bolsa.'
+    },
+    {
+      key: 'poop', emoji: '💩', name: 'Caca',
+      recipes: [['p','o','o','p'], ['c','a','c','a']],
+      hint: 'Para el emoji de caca, puedes escribirlo en ingles o en español. Solo cuatro letras y ya esta. Felicidades. Caca.',
+    },
+    {
+      key: 'skull', emoji: '💀', name: 'Calavera',
+      recipes: [['x','('],['x','c'],[')','x']],      // skull faces (case-insensitive)
+      hint: 'Las calaveras, los muertos. Cierran los ojos y nunca tienen una sonrisa. Ya no tienen nada por lo que sonreir. Ya no pueden jugar futelo.',
+    },
+    {
+      key: 'hug', emoji: '🫂', name: 'Abrazo',
+      recipes: [['(',')',')'],['(','(',')']],
+      hint: 'Los abrazos son lindos. Es como una persona agarrada a otra persona. Imaginate representaramos una persona como un par de parentesis (). Es como si le creciera una persona de un lado.'
+    },
+    {
+      key: 'shrug', emoji: '🤷', name: 'Encogimiento de Hombros',
+      recipes: [['e','h'],['m','e','h']],             // eh and meh (case-insensitive)
+      hint: 'Cuando te encoges de hombros, es porque no te importa algo. Hay un grunt característico al hacer esto. Ya sabes. No me importa. Pero en un grunt.',
+    },
+    {
+      key: 'moai', emoji: '🗿', name: 'Moai',
+      recipes: [['m','o','a','i']],
+      hint: '¿Qué le dijo un moai a otro moai? No te moai jaja gracias por escuchar mi chiste. Escribe moai no mas weon jaja'
+    },
+    {
+      key: 'cat', emoji: '🐱', name: 'Gato',
+      recipes: [[':','3']],                          // :3 cat face
+      hint: 'Tu sabes como hacer una cara de gato, cierto? Es un emoji clasico'
+    },
+    {
+      key: 'gun', emoji: '🔫', name: 'Pistola',
+      recipes: [['-','>'],['<','-']],
+      hint: 'La pistola es solamente la evolucion de la flecha. Y con flecha no me refiero a solamente esto <. Tiene que tener cuerpo. No seas flojo.'
     }
   ],
 
@@ -302,5 +378,6 @@ module.exports = {
     "Cual es el trabajo que jamas sera reemplazado por la IA?",
     "Un pajarito me conto...",
     "Sin importar cuantas personas lo digan, yo jamas voy a creer que...",
+    "describe el sexo vñkon un futelo",
   ],
 };
