@@ -66,6 +66,8 @@ export default function App() {
   const [lotteryRound,    setLotteryRound]    = useState(null);
   const [lotteryCarryOver, setLotteryCarryOver] = useState(0);
   const [lotteryCfg,      setLotteryCfg]      = useState({ LOTTERY_START_COST: 50, GAMBLING_COINS_PER_LETTER: 50, GAMBLING_WIN_LETTERS: 2 });
+  const [emojiDefs,       setEmojiDefs]       = useState([]);
+  const emojiDefsRef = useRef([]);
 
   // ── Prompt state ────────────────────────────────────────────────────────
   const [prompt,      setPrompt]      = useState(null);   // { id, text, closesAt }
@@ -101,7 +103,13 @@ export default function App() {
       .catch(() => {});
     fetch(`${base}/api/config`)
       .then((r) => r.json())
-      .then((data) => setLotteryCfg(data))
+      .then((data) => {
+        setLotteryCfg(data);
+        if (data.EMOJI_DEFS?.length) {
+          setEmojiDefs(data.EMOJI_DEFS);
+          emojiDefsRef.current = data.EMOJI_DEFS;
+        }
+      })
       .catch(() => {});
   }, [chatId]);
 
@@ -113,12 +121,8 @@ export default function App() {
       .then((r) => r.json())
       .then((data) => {
         const keys    = data.unlockedEmojis || [];
-        const EMOJI_MAP = {
-          happy:'😊', sad:'😢', tongue:'😛', laugh:'😂', cool:'😎',
-          wink:'😉',  cry:'😭', angry:'😠', love:'🥰',  rofl:'🤣',
-          star:'🤩',  think:'🤔',
-        };
-        setUnlockedEmojis(keys.map((k) => EMOJI_MAP[k]).filter(Boolean));
+        const emojiMap = Object.fromEntries(emojiDefsRef.current.map((d) => [d.key, d.emoji]));
+        setUnlockedEmojis(keys.map((k) => emojiMap[k]).filter(Boolean));
       })
       .catch(() => {});
   }, [initData, chatId]);
@@ -251,14 +255,10 @@ export default function App() {
     socket.on('notification', onNotification);
 
     // ── Emoji forge: update unlocked list when a merge completes ────────
-    const EMOJI_MAP = {
-      happy:'😊', sad:'😢', tongue:'😛', laugh:'😂', cool:'😎',
-      wink:'😉',  cry:'😭', angry:'😠', love:'🥰',  rofl:'🤣',
-      star:'🤩',  think:'🤔',
-    };
     const onEmojiComplete = (result) => {
       if (result.success && result.emoji?.key && !result.alreadyHad) {
-        const char = EMOJI_MAP[result.emoji.key];
+        const emojiMap = Object.fromEntries(emojiDefsRef.current.map((d) => [d.key, d.emoji]));
+        const char = emojiMap[result.emoji.key];
         if (char) setUnlockedEmojis((prev) => prev.includes(char) ? prev : [...prev, char]);
       }
     };
@@ -511,6 +511,7 @@ export default function App() {
         })}
         onEmojiInsert={(em) => setDraft((d) => d + em)}
         currentDraft={draft}
+        emojiDefs={emojiDefs}
       />
 
       {/* ── Shop modal ─────────────────────────────────────────────────── */}
