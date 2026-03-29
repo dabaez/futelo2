@@ -248,9 +248,10 @@ Un taller de creación de emojis:
 - Si la combinación coincide con una receta conocida, el emoji queda **desbloqueado permanentemente** y usable en cualquier sala.
 - Si no hay receta, los niveles se devuelven (+1 por ingrediente, máx. `MAX_LETTER_LEVEL`).
 - **Completar al instante**: paga `ceil(segundos_restantes × 0.02) 🪙`.
-- **Pista**: compra una pista críptica sobre un emoji que aún no tienes.
+- **Pista**: compra una pista críptica sobre un emoji que aún no tienes. Las pistas se **persisten en la DB** y vuelven a aparecer al reabrir el modal.
 - Una vez desbloqueado, el emoji aparece en la barra rápida del teclado para insertarlo con un toque.
 - Las mezclas activas, pistas compradas y emojis desbloqueados son **por sala (per-room)**.
+- `GET /api/config` expone la lista de emojis (`EMOJI_DEFS`) con clave, carácter y nombre — sin revelar recetas ni pistas. El frontend no tiene ninguna lista hardcodeada; siempre usa la del servidor.
 
 ### Achievements (Logros)
 
@@ -272,7 +273,7 @@ Las alertas por usuario (p.ej. "tu letra se vendió") se **persisten en la DB**.
 ## Tests
 
 ```bash
-cd backend && npm test   # Jest + supertest  (280 tests, 10 suites)
+cd backend && npm test   # Jest + supertest  (291 tests, 10 suites)
 cd frontend && npm test  # Vitest + Testing Library  (55 tests, 2 suites)
 ```
 
@@ -287,8 +288,8 @@ cd frontend && npm test  # Vitest + Testing Library  (55 tests, 2 suites)
 | `mining.test.js` | 18 | `buyPickaxe` (scaled cost), `swing`, hit/miss probability, all-caps coin fallback |
 | `prompt.test.js` | 21 | `buyPrompt`, `submitReply`, `castVote`, `closePrompt` with all edge cases |
 | `lottery.test.js` | 14 | `startLottery`, `placeBet`, `closeLottery`, `getActiveLottery`, cap overflow coins |
-| `api.test.js` | 64 | All REST endpoints end-to-end with a real SQLite DB; includes regression for `my-listings` open-only filter |
-| `emojiForge.test.js` | 27 | `inventoryKey`, `matchRecipe`, `startMerge` (validation + deduction), `instantComplete`, `buyHint`, `getStatus` |
+| `api.test.js` | 68 | All REST endpoints end-to-end with a real SQLite DB; includes regression for `my-listings` open-only filter, reaction coin correctness (room coins not global), hint persistence via status |
+| `emojiForge.test.js` | 27 | `inventoryKey`, `matchRecipe`, `startMerge` (validation + deduction), `instantComplete`, `buyHint` (persists to DB), `getStatus` (returns merge + emojis + hints) |
 | `achievements.test.js` | 40 | `checkAchievements` – all event types, already-earned guard, multi-award transaction, stat counter updates |
 
 ### Frontend test suites

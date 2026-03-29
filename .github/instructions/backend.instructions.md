@@ -9,6 +9,7 @@ applyTo: "backend/**"
 **The single source of truth for every game constant.** All other backend files
 import from here. The `/api/config` endpoint exposes public values to the
 frontend and also includes live values (`heat`, `catchProb`) from the black market engine.
+It also exposes `EMOJI_DEFS` — a sanitized array of `{ key, emoji, name }` objects derived from `EMOJI_RECIPES` (no recipes or hint text). The frontend uses this as the single source of truth for which emojis exist; nothing is hardcoded on the frontend.
 
 ```js
 module.exports = {
@@ -100,7 +101,7 @@ picks up new values on next page load via `GET /api/config`.
 - **better-sqlite3** – fully synchronous, single-writer SQLite.
 - WAL mode + `synchronous = NORMAL`.
 - DB file: `../../data/futelo.db` relative to `database.js` (i.e. `futelo/data/futelo.db`).
-- **Current schema version: 17** (migrations v1–v17 applied automatically on startup).
+- **Current schema version: 20** (migrations v1–v20 applied automatically on startup).
 
 ### Tables
 
@@ -121,9 +122,11 @@ picks up new values on next page load via `GET /api/config`.
 | `lottery_bets` | Multiple bets per user per round. Columns: `round_id`, `user_id`, `letter`. |
 | `notifications` | Persistent per-user toast queue. `delivered=0` until drained. Pruned 7 days after delivery. |
 | `emoji_merges` | Active and completed forge merges. Columns: `id`, `user_id`, `ingredients_json`, `finish_at`, `status` (`pending`/`done`/`refunded`), `result_emoji`. (migration v14) |
-| `unlocked_emojis` | Global per-user emoji unlocks. Columns: `user_id`, `emoji`. Unique `(user_id, emoji)`. (migration v15) |
-| `user_stats` | Aggregate counters per user. Columns: `user_id` (PK), `msgs_sent`, `coins_earned`, `rolls_done`, `mines_done`, `markets_done`, `lotteries_won`, `prompts_answered`, `emojis_forged`. (migration v16) |
-| `user_achievements` | Earned achievements. Columns: `user_id`, `achievement_id`. Unique `(user_id, achievement_id)`. (migration v17) |
+| `unlocked_emojis` | Per-room emoji unlocks. Columns: `user_id`, `room_id`, `emoji_key`. Unique `(user_id, room_id, emoji_key)`. (migration v15, made per-room in v19) |
+| `user_stats` | Aggregate counters per `(user_id, room_id)`. Columns: `user_id`, `room_id`, `msgs_sent`, `coins_earned`, `rolls_done`, `mines_done`, `markets_done`, `lotteries_won`, `prompts_answered`, `emojis_forged`. (migration v16, made per-room in v19) |
+| `user_achievements` | Earned achievements per room. Columns: `user_id`, `room_id`, `achievement_id`. Unique `(user_id, room_id, achievement_id)`. (migration v17, made per-room in v19) |
+| `message_reactions` | Per-message reactions. Columns: `message_id`, `user_id`, `reaction` (`like`/`dislike`). Unique `(message_id, user_id)`. (migration v18) |
+| `emoji_hints` | Purchased forge hints, **global per-user** (not per-room). Columns: `id`, `user_id`, `hint_text`, `created_at`. (migration v20) |
 
 ### Prepared Statements
 
@@ -183,6 +186,13 @@ const { db, stmts, upsertUser, requireUser, upsertRoom, requireRoom } = require(
 | `markNotificationDelivered` | Mark one delivered by id |
 | `markAllNotificationsDelivered` | Mark all pending for a user delivered |
 | `pruneOldNotifications` | Delete delivered notifications older than a Unix timestamp |
+
+**Emoji Forge:**
+
+| Statement | What it does |
+|---|---|
+| `insertEmojiHint` | `INSERT INTO emoji_hints (user_id, hint_text)` — persists a purchased hint |
+| `getEmojiHints` | `SELECT hint_text FROM emoji_hints WHERE user_id = ?` — returns all hints for a user (global, not per-room) |
 
 ---
 
@@ -417,7 +427,7 @@ All endpoints in `server.js`. Auth sent as `x-init-data` header or `body.initDat
 
 - Config: `backend/jest.config.js` (`testEnvironment: 'node'`, `maxWorkers: 1`)
 - Run: `cd backend && npm test`
-- **280 tests across 10 suites** (all passing)
+- **291 tests across 10 suites** (all passing)
 
 | File | Tests | What it covers |
 |---|---|---|
@@ -428,8 +438,8 @@ All endpoints in `server.js`. Auth sent as `x-init-data` header or `body.initDat
 | `src/__tests__/mining.test.js` | 18 | `buyPickaxe` (scaled cost), `swing`, all-capped coin fallback |
 | `src/__tests__/prompt.test.js` | 22 | `buyPrompt`, `submitReply` (incl. username sourced from users table), `castVote`, `closePrompt` |
 | `src/__tests__/lottery.test.js` | 14 | `startLottery`, `placeBet`, `closeLottery`, carry-over |
-| `src/__tests__/api.test.js` | 64 | All REST endpoints end-to-end with temp SQLite DB; `my-listings` open-only regression |
-| `src/__tests__/emojiForge.test.js` | 27 | `inventoryKey`, `matchRecipe`, `startMerge` (7 cases), `instantComplete` (4), `buyHint` (3), `getStatus` (2) |
+| `src/__tests__/api.test.js` | 68 | All REST endpoints end-to-end with temp SQLite DB; `my-listings` open-only regression; reaction coin correctness; hint persistence |
+| `src/__tests__/emojiForge.test.js` | 27 | `inventoryKey`, `matchRecipe`, `startMerge` (7 cases), `instantComplete` (4), `buyHint` (persists to DB), `getStatus` (returns hints array) |
 | `src/__tests__/achievements.test.js` | 40 | Already-earned guard, stat counter updates, all 8 event types, transaction integrity |
 
 **Key patterns:**
@@ -440,3 +450,13 @@ All endpoints in `server.js`. Auth sent as `x-init-data` header or `body.initDat
 - User tokens: `ALICE='dev:1001:…'`, `BOB='dev:1002:…'`, `DAVE='dev:1004:…'` (market buyer), `EVE='dev:1005:…'` (market seller), `FRANK='dev:1006:…'` (BM), `GINA/HANK` (mining), `IAN/JANE` (lottery), `KATE/LEON` (prompt). Use fresh users per suite to avoid state conflicts.
 - Dev tokens without Chat ID default to `chatId = -1001`. Pass `?roomId=-1001` to GET endpoints when asserting on resources created by authenticated POSTs.
 - `prompt.test.js` `mockStmts` must include `getUser: { get: jest.fn() }` — `submitReply` reads `username`/`first_name`/`photo_url` from `users` (not `room_members`).
+- `emojiForge.test.js` `mockStmts` must include `insertEmojiHint: { run: jest.fn() }` and `getEmojiHints: { all: jest.fn() }`. Both `getStatus` calls must pass `roomId` as second argument.
+
+---
+
+## ⚠️ Critical: Coin State Lives in `room_members`
+
+Since migration v12, player coins are stored in `room_members.coins`, **not** `users.coins`. The `users.coins` column is legacy and always 0.
+
+- **Reactions endpoint** (`POST /api/reactions`): must use `stmts.updateRoomCoins(delta, roomId, authorId)` and read back `stmts.getRoomMember.get(roomId, authorId).coins` for the `user_update` socket event. Never use `stmts.updateCoins` or `requireUser(id).coins` in reaction handlers — they read the stale `users` table and will zero out the player's coins.
+- Same rule applies to any new endpoint that awards or deducts coins outside `processMessage`.

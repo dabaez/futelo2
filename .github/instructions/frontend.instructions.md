@@ -38,7 +38,7 @@ App.jsx
  ├── ShopModal                    ← chatId prop; lootbox roll + P2P market + prompt + mines
  ├── BlackMarketModal             ← chatId prop; secret P2P market (triple-tap)
  ├── LotteryModal                 ← chatId prop; gambling round (auto-opens on new_lottery)
- ├── EmojiForgeModal              ← isOpen, onClose, initData, chatId, coins, inventory, socket, onPurchase, onEmojiInsert, currentDraft
+ ├── EmojiForgeModal              ← isOpen, onClose, initData, chatId, coins, inventory, socket, onPurchase, onEmojiInsert, currentDraft, emojiDefs
  └── AchievementsModal            ← isOpen, onClose, initData, chatId
 ```
 
@@ -56,6 +56,14 @@ In dev mode (no TG SDK) the permission step is skipped.
 server-pushed state changes. Call it on `user_update` socket events and
 shop/mine AJAX responses. Handles: `newCoins`, `newInventory`, `lockedLetter`,
 `pickaxeHits`, `allows_write_to_pm`.
+
+**`emojiDefs` / `emojiDefsRef`** — `App.jsx` fetches emoji definitions from
+`/api/config` (field `EMOJI_DEFS: [{key, emoji, name}]`) and stores them in
+both `useState` (`emojiDefs`, used as a prop) and `useRef` (`emojiDefsRef`,
+used inside socket callbacks to avoid stale closures). The `EMOJI_MAP`
+(key → emoji character) is derived on-the-fly from `emojiDefsRef.current`
+whenever needed. `emojiDefs` is passed as a prop to `EmojiForgeModal` and
+`CelebrationOverlay`.
 
 **`useAuth`** also returns `chatId` from the auth response. `App.jsx` passes it
 as a prop to `ChatFeed`, `ShopModal`, `BlackMarketModal`, and `LotteryModal`.
@@ -138,13 +146,17 @@ Haptic on strip land: `legendario` → `notificationOccurred('success')`;
 
 Two-tab bottom-sheet (`🧪 Forja` + `😊 Emojis`).
 
+**`emojiDefs` prop** — array of `{ key, emoji, name }` objects fetched from `/api/config` and passed down from `App.jsx`. This is the single source of truth for which emojis exist; there is no hardcoded `ALL_EMOJIS` constant inside this component. `CelebrationOverlay` also receives `emojiDefs` as a prop.
+
+**Hint persistence** — `GET /api/forge/status` returns a `hints` array. On modal open (`useEffect` on `isOpen`), the component calls the status endpoint and hydrates `setHints(data.hints || [])`. Hints purchased in previous sessions (stored in the `emoji_hints` DB table) are therefore restored automatically.
+
 **Forja tab** — ingredient picker with 3 row groups: letter rows (A-Z + Ñ), symbol row (`SYMBOL_CHARS`), number row. Max 4 ingredients. Selected chips shown above. Actions:
 - **Forjar**: calls `POST /api/forge/start`, disables ingredient picker while merge is running.
 - **Completar** (instant): `POST /api/forge/instant` — pays per-second cost; enabled only during active merge.
 - **Pista**: `POST /api/forge/hint` — shows hint toast; costs `HINT_COST` coins.
 - Active merge countdown timer (re-rendered via `setInterval(1000)`).
 
-**Emojis tab** — grid of all 12 forgeable emojis. Unlocked items shown in full colour; locked items shown at reduced opacity with 🔒. Clicking an unlocked emoji calls `onEmojiInsert(emoji)` → appended to draft.
+**Emojis tab** — grid of all forgeable emojis (driven by `emojiDefs` prop). Unlocked items shown in full colour; locked items shown at reduced opacity with 🔒. Clicking an unlocked emoji calls `onEmojiInsert(emoji)` → appended to draft.
 
 **`SYMBOL_CHARS`** in this file must stay in sync with `config.js` and `RestrictedKeyboard.jsx`. Current value: `'!?.,:-()@#&*;<>+~$%/^'` (22 chars).
 
