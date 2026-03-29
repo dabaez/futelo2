@@ -244,6 +244,7 @@ function buyHint(userId, roomId) {
 
   stmts.updateRoomCoins.run(-HINT_COST, roomId, userId);
   const fresh = stmts.getRoomMember.get(roomId, userId);
+  stmts.insertEmojiHint.run(userId, def.hint);
 
   return { hint: def.hint, newCoins: fresh.coins };
 }
@@ -258,9 +259,11 @@ function buyHint(userId, roomId) {
 function getStatus(userId, roomId) {
   const merge    = stmts.getActiveMerge.get(userId) || null;
   const unlocked = stmts.getUnlockedEmojis.all(userId, roomId);
+  const hints    = stmts.getEmojiHints.all(userId);
   return {
     merge,
     unlockedEmojis: unlocked.map((r) => r.emoji_key),
+    hints: hints.map((r) => r.hint_text),
   };
 }
 

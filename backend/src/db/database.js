@@ -98,7 +98,7 @@ db.exec(`
 // Migrations never need to be run manually — they apply automatically on startup.
 //
 // IMPORTANT: never edit a past migration. Always append a new one.
-const SCHEMA_VERSION = 19;
+const SCHEMA_VERSION = 20;
 
 const migrations = [
   // ── v1: P2P letter market ─────────────────────────────────────────────────
@@ -548,6 +548,20 @@ const migrations = [
       DROP TABLE user_stats_old;
     `);
   },
+
+  // v20 – persist purchased emoji hints per user
+  // Hints are global per-user (not per-room) because emojis are global.
+  () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS emoji_hints (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id    INTEGER NOT NULL REFERENCES users(id),
+        hint_text  TEXT    NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE INDEX IF NOT EXISTS idx_eh_user ON emoji_hints(user_id);
+    `);
+  },
 ];
 
 // Apply any pending migrations inside a single transaction so a crash mid-way
@@ -810,6 +824,12 @@ const stmts = {
   ),
   getUnlockedEmojis: db.prepare(
     'SELECT emoji_key FROM unlocked_emojis WHERE user_id = ? AND room_id = ?'
+  ),
+  insertEmojiHint: db.prepare(
+    'INSERT INTO emoji_hints (user_id, hint_text) VALUES (?, ?)'
+  ),
+  getEmojiHints: db.prepare(
+    'SELECT hint_text FROM emoji_hints WHERE user_id = ? ORDER BY id ASC'
   ),
 
   // ── Message reactions ────────────────────────────────────────────────────────
