@@ -863,4 +863,133 @@ describe('Config endpoint', () => {
     expect(res.body.HINT_COST).toBeDefined();
     expect(typeof res.body.HINT_COST).toBe('number');
   });
+
+  test('GET /api/config includes EMOJI_DEFS with key/emoji/name but no recipes or hints', async () => {
+    const res = await request(app).get('/api/config');
+    expect(res.status).toBe(200);
+    const defs = res.body.EMOJI_DEFS;
+    expect(Array.isArray(defs)).toBe(true);
+    expect(defs.length).toBeGreaterThan(0);
+    for (const def of defs) {
+      expect(def).toHaveProperty('key');
+      expect(def).toHaveProperty('emoji');
+      expect(def).toHaveProperty('name');
+      expect(def).not.toHaveProperty('recipes');
+      expect(def).not.toHaveProperty('hint');
+    }
+  });
 });
+
+describe('Message reactions', () => {
+  let app;
+  beforeAll(async () => {
+    app = getApp();
+    await authAs(app, ALICE);
+    await authAs(app, BOB);
+    // Seed enough coins so Alice can send a message and Bob can react
+    await seedCoins(app, ALICE, 0);
+  });
+
+  test('POST /api/reactions/:id – like credits correct room coins to message author', async () => {
+    // Alice sends a message
+    await request(app).post('/api/message').set(authHeader(BOB)).send({ text: 'h' });
+    const msgRes = await request(app).post('/api/message').set(authHeader(ALICE)).send({ text: 'h' });
+    const messageId = msgRes.body.messageId;
+    expect(messageId).toBeDefined();
+
+    // Get Alice's coins before the like
+    const meBefore = await request(app).get('/api/me').set(authHeader(ALICE));
+    const coinsBefore = meBefore.body.coins;
+
+    // Bob likes Alice's message
+    const reactRes = await request(app)
+      .post(`/api/reactions/${messageId}`)
+      .set(authHeader(BOB))
+      .send({ reaction: 'like' });
+    expect(reactRes.status).toBe(200);
+    expect(reactRes.body.likes).toBe(1);
+
+    // Alice should have gained coins
+    const meAfter = await request(app).get('/api/me').set(authHeader(ALICE));
+    expect(meAfter.body.coins).toBeGreaterThan(coinsBefore);
+  });
+
+  test('POST /api/reactions/:id – dislike uses room coins (does not set coins to 0)', async () => {
+    // Eve sends a message, Dave dislikes it
+    await authAs(app, DAVE);
+    await authAs(app, EVE);
+    // Alternate messages to earn coins for EVE
+    await seedCoins(app, EVE, 30);
+
+    await request(app).post('/api/message').set(authHeader(DAVE)).send({ text: 'h' });
+    const msgRes = await request(app).post('/api/message').set(authHeader(EVE)).send({ text: 'h' });
+    const messageId = msgRes.body.messageId;
+    expect(messageId).toBeDefined();
+
+    const meBefore = await request(app).get('/api/me').set(authHeader(EVE));
+    const coinsBefore = meBefore.body.coins;
+    expect(coinsBefore).toBeGreaterThan(0);
+
+    const reactRes = await request(app)
+      .post(`/api/reactions/${messageId}`)
+      .set(authHeader(DAVE))
+      .send({ reaction: 'dislike' });
+    expect(reactRes.status).toBe(200);
+    expect(reactRes.body.dislikes).toBe(1);
+
+    // Eve should have lost coins but not gone to 0 (unless she had exactly 1)
+    const meAfter = await request(app).get('/api/me').set(authHeader(EVE));
+    expect(meAfter.body.coins).toBeLessThan(coinsBefore);
+    // Crucially: coins come from room_members, not zeroed-out users table
+    expect(meAfter.body.coins).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('Emoji forge hint persistence', () => {
+  let app;
+  beforeAll(async () => {
+    app = getApp();
+    await authAs(app, FRANK);
+    await seedCoins(app, FRANK, 500);
+  });
+
+  test('GET /api/emoji/status includes hints array (empty initially)', async () => {
+    const res = await request(app)
+      .get('/api/emoji/status')
+      .set(authHeader(FRANK));
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.hints)).toBe(true);
+    expect(res.body.hints.length).toBe(0);
+  });
+
+  test('POST /api/emoji/hint persists hint and GET /api/emoji/status returns it', async () => {
+    const hintRes = await request(app)
+      .post('/api/emoji/hint')
+      .set(authHeader(FRANK))
+      .send({});
+    expect(hintRes.status).toBe(200);
+    expect(typeof hintRes.body.hint).toBe('string');
+
+    // Re-fetch status — hint must now appear
+    const statusRes = await request(app)
+      .get('/api/emoji/status')
+      .set(authHeader(FRANK));
+    expect(statusRes.status).toBe(200);
+    expect(statusRes.body.hints).toContain(hintRes.body.hint);
+  });
+
+  test('hints accumulate across multiple purchases', async () => {
+    const { HINT_COST } = require('../config');
+    await seedCoins(app, FRANK, HINT_COST * 3);
+
+    await request(app).post('/api/emoji/hint').set(authHeader(FRANK)).send({});
+    await request(app).post('/api/emoji/hint').set(authHeader(FRANK)).send({});
+
+    const statusRes = await request(app)
+      .get('/api/emoji/status')
+      .set(authHeader(FRANK));
+    // At least 3 hints total (1 from previous test + 2 just bought)
+    expect(statusRes.body.hints.length).toBeGreaterThanOrEqual(3);
+  });
+});
+

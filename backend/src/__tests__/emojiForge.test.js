@@ -29,6 +29,8 @@ const mockStmts = {
   getMergeById:            { get: jest.fn() },
   closeMerge:              { run: jest.fn() },
   insertUnlockedEmoji:     { run: jest.fn() },
+  insertEmojiHint:         { run: jest.fn() },
+  getEmojiHints:           { all: jest.fn() },
 };
 
 jest.mock('../db/database', () => ({
@@ -288,6 +290,7 @@ describe('buyHint', () => {
     const result = buyHint(1, -1001);
 
     expect(stmts.updateRoomCoins.run).toHaveBeenCalledWith(-HINT_COST, -1001, 1);
+    expect(stmts.insertEmojiHint.run).toHaveBeenCalledWith(1, expect.any(String));
     expect(typeof result.hint).toBe('string');
     expect(result.hint.length).toBeGreaterThan(0);
     expect(result.newCoins).toBe(afterCoins);
@@ -301,11 +304,13 @@ describe('getStatus', () => {
   test('returns null merge and empty emoji list when user has nothing', () => {
     stmts.getActiveMerge.get.mockReturnValue(null);
     stmts.getUnlockedEmojis.all.mockReturnValue([]);
+    stmts.getEmojiHints.all.mockReturnValue([]);
 
-    const result = getStatus(1);
+    const result = getStatus(1, -1001);
 
     expect(result.merge).toBeNull();
     expect(result.unlockedEmojis).toEqual([]);
+    expect(result.hints).toEqual([]);
   });
 
   test('returns active merge and mapped emoji keys', () => {
@@ -315,10 +320,15 @@ describe('getStatus', () => {
       { emoji_key: 'happy' },
       { emoji_key: 'cool' },
     ]);
+    stmts.getEmojiHints.all.mockReturnValue([
+      { hint_text: 'Primera pista' },
+      { hint_text: 'Segunda pista' },
+    ]);
 
-    const result = getStatus(1);
+    const result = getStatus(1, -1001);
 
     expect(result.merge).toEqual(merge);
     expect(result.unlockedEmojis).toEqual(['happy', 'cool']);
+    expect(result.hints).toEqual(['Primera pista', 'Segunda pista']);
   });
 });
