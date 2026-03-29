@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef } from 'react';
 
 /**
  * RestrictedKeyboard
@@ -92,6 +92,7 @@ export default function RestrictedKeyboard({
 }) {
   const [mode, setMode]   = useState('letters'); // 'letters' | 'symbols'
   const [caps, setCaps]   = useState(false);
+  const emojiTapRef       = useRef({ x: 0, y: 0 }); // scroll-vs-tap guard for emoji bar
   const lockedSet         = useMemo(() => new Set(lockedLetters), [lockedLetters]);
   const draftCounts       = useMemo(() => countDraftChars(draft), [draft]);
 
@@ -169,7 +170,14 @@ export default function RestrictedKeyboard({
                   type="button"
                   onPointerDown={(e) => {
                     e.preventDefault();
-                    if (!disabled && !alreadyUsed) onDraftChange(draft + em);
+                    emojiTapRef.current = { x: e.clientX, y: e.clientY };
+                  }}
+                  onPointerUp={(e) => {
+                    const dx = Math.abs(e.clientX - emojiTapRef.current.x);
+                    const dy = Math.abs(e.clientY - emojiTapRef.current.y);
+                    if (dx < 8 && dy < 8 && !disabled && !alreadyUsed) {
+                      onDraftChange(draft + em);
+                    }
                   }}
                   className={`text-lg w-9 h-8 flex items-center justify-center
                              rounded-lg shadow-sm shrink-0 transition-opacity
