@@ -79,8 +79,8 @@ function matchRecipe(ingredients) {
  * @returns {{ merge: object, newInventory: object }}
  */
 function startMerge(userId, roomId, ingredients) {
-  if (!Array.isArray(ingredients) || ingredients.length < 2 || ingredients.length > 6) {
-    throw new Error('Necesitas entre 2 y 6 ingredientes para la mezcla.');
+  if (!Array.isArray(ingredients) || ingredients.length < 1 || ingredients.length > 6) {
+    throw new Error('Necesitas entre 1 y 6 ingredientes para la mezcla.');
   }
 
   const existing = stmts.getActiveMerge.get(userId);

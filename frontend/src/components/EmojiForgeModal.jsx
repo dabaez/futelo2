@@ -252,7 +252,7 @@ export default function EmojiForgeModal({
 
   // ── Start merge ──────────────────────────────────────────────────────────
   const handleStartMerge = useCallback(async () => {
-    if (inputChars.length < 2 || loading) return;
+    if (inputChars.length < 1 || loading) return;
     setLoading(true);
     setErr(null);
     try {
@@ -547,9 +547,9 @@ export default function EmojiForgeModal({
                   {/* Forge button */}
                   <button
                     onClick={handleStartMerge}
-                    disabled={inputChars.length < 2 || loading}
+                    disabled={inputChars.length < 1 || loading}
                     className={`w-full py-3 rounded-xl font-bold text-sm transition-all
-                      ${inputChars.length >= 2 && !loading
+                      ${inputChars.length >= 1 && !loading
                         ? 'bg-tg-button text-tg-btn-text active:brightness-90'
                         : 'bg-gray-300 text-gray-400 cursor-not-allowed'}`}
                   >
