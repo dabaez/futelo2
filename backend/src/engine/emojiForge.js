@@ -232,15 +232,23 @@ function buyHint(userId, roomId) {
     throw new Error(`Monedas insuficientes. Una pista cuesta ${HINT_COST} 🪙.`);
   }
 
-  const unlockedRows = stmts.getUnlockedEmojis.all(userId, roomId);
-  const unlockedKeys = new Set(unlockedRows.map((r) => r.emoji_key));
+  const unlockedRows  = stmts.getUnlockedEmojis.all(userId, roomId);
+  const unlockedKeys  = new Set(unlockedRows.map((r) => r.emoji_key));
+  const purchasedHints = new Set(stmts.getEmojiHints.all(userId).map((r) => r.hint_text));
+
   const locked = EMOJI_RECIPES.filter((e) => !unlockedKeys.has(e.key));
 
   if (locked.length === 0) {
     throw new Error('¡Ya tienes todos los emojis desbloqueados!');
   }
 
-  const def = locked[Math.floor(Math.random() * locked.length)];
+  const available = locked.filter((e) => !purchasedHints.has(e.hint));
+
+  if (available.length === 0) {
+    throw new Error('¡Ya tienes todas las pistas disponibles de los emojis que te faltan!');
+  }
+
+  const def = available[Math.floor(Math.random() * available.length)];
 
   stmts.updateRoomCoins.run(-HINT_COST, roomId, userId);
   const fresh = stmts.getRoomMember.get(roomId, userId);

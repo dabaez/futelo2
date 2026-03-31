@@ -147,12 +147,12 @@ describe('matchRecipe', () => {
 // startMerge
 // ─────────────────────────────────────────────────────────────────────────────
 describe('startMerge', () => {
-  test('throws when fewer than 2 ingredients are provided', () => {
-    expect(() => startMerge(1, -1001, ['a'])).toThrow(/2 y 6/i);
+  test('throws when fewer than 1 ingredient is provided', () => {
+    expect(() => startMerge(1, -1001, [])).toThrow(/1 y 6/i);
   });
 
   test('throws when more than 6 ingredients are provided', () => {
-    expect(() => startMerge(1, -1001, ['a','b','c','d','e','f','g'])).toThrow(/2 y 6/i);
+    expect(() => startMerge(1, -1001, ['a','b','c','d','e','f','g'])).toThrow(/1 y 6/i);
   });
 
   test('throws when the user already has an active merge', () => {
@@ -277,13 +277,26 @@ describe('buyHint', () => {
     stmts.getUnlockedEmojis.all.mockReturnValue(
       EMOJI_RECIPES.map((e) => ({ emoji_key: e.key }))
     );
+    stmts.getEmojiHints.all.mockReturnValue([]);
     stmts.getRoomMember.get.mockReturnValue(makeRoomMember({ coins: 9999 - HINT_COST }));
     expect(() => buyHint(1, -1001)).toThrow(/todos los emojis/i);
+  });
+
+  test('throws when all hints for unowned emojis have already been purchased', () => {
+    requireRoomMember.mockReturnValue(makeRoomMember({ coins: 9999 }));
+    stmts.getUnlockedEmojis.all.mockReturnValue([]); // none unlocked
+    // Mark every recipe's hint as already purchased
+    stmts.getEmojiHints.all.mockReturnValue(
+      EMOJI_RECIPES.map((e) => ({ hint_text: e.hint }))
+    );
+    stmts.getRoomMember.get.mockReturnValue(makeRoomMember({ coins: 9999 - HINT_COST }));
+    expect(() => buyHint(1, -1001)).toThrow(/todas las pistas/i);
   });
 
   test('deducts HINT_COST and returns a non-empty hint string', () => {
     requireRoomMember.mockReturnValue(makeRoomMember({ coins: 9999 }));
     stmts.getUnlockedEmojis.all.mockReturnValue([]); // none unlocked → all are candidates
+    stmts.getEmojiHints.all.mockReturnValue([]);     // no hints purchased yet
     const afterCoins = 9999 - HINT_COST;
     stmts.getRoomMember.get.mockReturnValue(makeRoomMember({ coins: afterCoins }));
 
@@ -294,6 +307,20 @@ describe('buyHint', () => {
     expect(typeof result.hint).toBe('string');
     expect(result.hint.length).toBeGreaterThan(0);
     expect(result.newCoins).toBe(afterCoins);
+  });
+
+  test('never returns a hint already purchased', () => {
+    requireRoomMember.mockReturnValue(makeRoomMember({ coins: 9999 }));
+    stmts.getUnlockedEmojis.all.mockReturnValue([]);
+    // Purchase all but the last emoji's hint
+    const purchased = EMOJI_RECIPES.slice(0, -1).map((e) => ({ hint_text: e.hint }));
+    stmts.getEmojiHints.all.mockReturnValue(purchased);
+    const afterCoins = 9999 - HINT_COST;
+    stmts.getRoomMember.get.mockReturnValue(makeRoomMember({ coins: afterCoins }));
+
+    const result = buyHint(1, -1001);
+
+    expect(result.hint).toBe(EMOJI_RECIPES[EMOJI_RECIPES.length - 1].hint);
   });
 });
 
