@@ -115,10 +115,11 @@ Chat IDs for different tabs.
    new write inside `processMessage`, add it inside the existing transaction
    closure, not after it.
 
-3. **Letters are unlock levels, not consumables, and are capped at `MAX_LETTER_LEVEL` (6).**
-   `inventory[L]` is never decremented by sending a message. It only increases (from the
-   first-message bonus or shop rolls — tiers never grant letters), and is always clamped
-   to `MAX_LETTER_LEVEL` on every increment.
+3. **Inventory items are unlock levels, not consumables, and are capped at `MAX_LETTER_LEVEL` (6).**
+   `inventory[key]` is never decremented by sending a message. It only increases (from the
+   first-message bonus, shop rolls, or mining — tiers never grant letters), and is always clamped
+   to `MAX_LETTER_LEVEL` on every increment. The mineable pool includes letters (a-z, ñ),
+   `_numbers`, and `_symbols` — not only letters.
 
 4. **WAL mode.** Do not change `journal_mode`. The server's concurrency model
    (Socket.io events + HTTP requests sharing one DB connection) depends on
@@ -171,4 +172,5 @@ Chat IDs for different tabs.
 | System messages missing from feed | Requires `id=0` user row (migration v5). Restart server on a fresh DB. |
 | Game state bleeds between groups | Every query must pass the correct `roomId`. Room 0 is the legacy placeholder — do not use in new code. |
 | BM heat is per-room | It is **not** per-room — BM heat is global. `getAllOpenBmListingsGlobal` scans all rooms. Intentional. |
+| Hint purchase gives a duplicate hint | `buyHint` filters out already-purchased hint texts (`getEmojiHints`) before picking randomly. If all hints for unowned emojis are already purchased it throws — never skip this guard. |
 | Prompt / lottery won't start | Only one active per room at a time. Check `getActivePrompt` / `getActiveLotteryRound` first. |

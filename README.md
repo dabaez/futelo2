@@ -227,8 +227,8 @@ Un mini-juego de exploración individual:
 
 - Compra un pico en la tienda por 150 🪙 base + 2 🪙 por cada nivel de inventario que ya tengas (mismo escalado que las cajas). Otorga 1000 golpes.
 - Toca la roca en la pestaña ⛏️ Minas para gastar un golpe.
-- Cada golpe tiene un **1% de probabilidad** de encontrar una letra aleatoria (+1 nivel en el inventario, máx. 6). De media, ~1 hallazgo cada 100 golpes.
-- Si el inventario ya está completo, el golpe otorga monedas en lugar de una letra.
+- Cada golpe tiene un **1% de probabilidad** de encontrar un objeto aleatorio del pool mineable: letras (a-z, ñ), grupo de números `_numbers` o grupo de símbolos `_symbols` (+1 nivel, máx. 6). De media, ~1 hallazgo cada 100 golpes.
+- Si todo el inventario mineable ya está al máximo, el golpe otorga monedas en lugar de un hallazgo.
 - Los picos se acumulan — puedes comprar varios seguidos.
 - Es una actividad en solitario; no se emiten eventos a otros jugadores.
 
@@ -248,7 +248,7 @@ Un taller de creación de emojis:
 - Si la combinación coincide con una receta conocida, el emoji queda **desbloqueado permanentemente** y usable en cualquier sala.
 - Si no hay receta, los niveles se devuelven (+1 por ingrediente, máx. `MAX_LETTER_LEVEL`).
 - **Completar al instante**: paga `ceil(segundos_restantes × 0.02) 🪙`.
-- **Pista**: compra una pista críptica sobre un emoji que aún no tienes. Las pistas se **persisten en la DB** y vuelven a aparecer al reabrir el modal.
+- **Pista**: compra una pista críptica sobre un emoji que aún no tienes. El servidor garantiza que **no se repiten pistas** y rechaza la compra cuando ya tienes todas las pistas disponibles de los emojis que te faltan. Las pistas se **persisten en la DB** y vuelven a aparecer al reabrir el modal.
 - Una vez desbloqueado, el emoji aparece en la barra rápida del teclado para insertarlo con un toque.
 - Las mezclas activas, pistas compradas y emojis desbloqueados son **por sala (per-room)**.
 - `GET /api/config` expone la lista de emojis (`EMOJI_DEFS`) con clave, carácter y nombre — sin revelar recetas ni pistas. El frontend no tiene ninguna lista hardcodeada; siempre usa la del servidor.
@@ -273,7 +273,7 @@ Las alertas por usuario (p.ej. "tu letra se vendió") se **persisten en la DB**.
 ## Tests
 
 ```bash
-cd backend && npm test   # Jest + supertest  (291 tests, 10 suites)
+cd backend && npm test   # Jest + supertest  (296 tests, 10 suites)
 cd frontend && npm test  # Vitest + Testing Library  (55 tests, 2 suites)
 ```
 
@@ -285,11 +285,11 @@ cd frontend && npm test  # Vitest + Testing Library  (55 tests, 2 suites)
 | `engine.test.js` | 34 | `letterRequirements`, all tiers, first-message bonus (cap-ceiling), coin floor, `shopRoll` (allCapped path, steering to uncapped) |
 | `market.test.js` | 27 | Regular and black-market list/buy/cancel, commission, `bmBuyListing` |
 | `blackMarket.test.js` | 16 | Heat decay, `catchProbability`, `runCatchCheck`, expiry |
-| `mining.test.js` | 18 | `buyPickaxe` (scaled cost), `swing`, hit/miss probability, all-caps coin fallback |
+| `mining.test.js` | 21 | `buyPickaxe` (scaled cost), `swing`, hit/miss probability, `_numbers`/`_symbols` finds, all-caps coin fallback |
 | `prompt.test.js` | 21 | `buyPrompt`, `submitReply`, `castVote`, `closePrompt` with all edge cases |
 | `lottery.test.js` | 14 | `startLottery`, `placeBet`, `closeLottery`, `getActiveLottery`, cap overflow coins |
 | `api.test.js` | 68 | All REST endpoints end-to-end with a real SQLite DB; includes regression for `my-listings` open-only filter, reaction coin correctness (room coins not global), hint persistence via status |
-| `emojiForge.test.js` | 27 | `inventoryKey`, `matchRecipe`, `startMerge` (validation + deduction), `instantComplete`, `buyHint` (persists to DB), `getStatus` (returns merge + emojis + hints) |
+| `emojiForge.test.js` | 28 | `inventoryKey`, `matchRecipe`, `startMerge` (validation + deduction), `instantComplete`, `buyHint` (no-duplicate guard, all-hints-purchased guard, persists to DB), `getStatus` (returns merge + emojis + hints) |
 | `achievements.test.js` | 40 | `checkAchievements` – all event types, already-earned guard, multi-award transaction, stat counter updates |
 
 ### Frontend test suites
