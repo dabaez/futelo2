@@ -326,6 +326,16 @@ module.exports = {
       key: 'gun', emoji: '🔫', name: 'Pistola',
       recipes: [['-','>'],['<','-']],
       hint: 'La pistola es solamente la evolucion de la flecha. Y con flecha no me refiero a solamente esto <. Tiene que tener cuerpo. No seas flojo.'
+    },
+    {
+      key: 'cowboy', emoji: '🤠', name: 'Vaquero',
+      recipes: [['c',')','o'],['c',')','0']],
+      hint: 'El emoji de vaquero es algo complicado. Primero, hay que hacer el sombrero, esto se hace con una letra y un símbolo. La letra es una C opa redonda, y la base (deberias pensar como hacerlo ) . La cara va debajo del sombrero, una cara redonda.'
+    },
+    {
+      key: 'flex', emoji: '💪', name: 'Fuerza',
+      recipes: [['l','n']],
+      hint: 'El emoji de un brazo flexionado se representa con dos letras. Primero, hay un brazo yendo para arriba, La verdad no sé como se hará eso. Después, está el músculo del brazo, un bump en el camiNo.'
     }
   ],
 
