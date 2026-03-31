@@ -1056,9 +1056,13 @@ export default function ShopModal({
                       )}
                       {swingState === 'found' && swingResult && (
                         <>
-                          <p className="text-xs font-semibold text-yellow-500 tracking-widest uppercase">✨ ¡Letra encontrada!</p>
+                          <p className="text-xs font-semibold text-yellow-500 tracking-widest uppercase">
+                            {swingResult.letter === '_numbers' ? '✨ ¡Números desbloqueados!' : swingResult.letter === '_symbols' ? '✨ ¡Símbolos desbloqueados!' : '✨ ¡Letra encontrada!'}
+                          </p>
                           <div className="bg-yellow-400/20 border border-yellow-400/50 rounded-xl px-6 py-2 text-center">
-                            <span className="text-4xl font-bold text-yellow-400 uppercase">{swingResult.letter}</span>
+                            <span className="text-4xl font-bold text-yellow-400 uppercase">
+                              {swingResult.letter === '_numbers' ? '0-9' : swingResult.letter === '_symbols' ? '!@#' : swingResult.letter}
+                            </span>
                           </div>
                         </>
                       )}

@@ -21,15 +21,15 @@ const {
   CAP_OVERFLOW_COINS_PER_LETTER,
 } = require('../config');
 
-/** All valid letters that can be found while mining (includes ñ). */
-const ALPHABET_ARR = 'abcdefghijklmnopqrstuvwxyzñ'.split('');
+/** All items that can be found while mining: letters (including ñ), numbers group, and symbols group. */
+const MINEABLE_POOL = [...'abcdefghijklmnopqrstuvwxyzñ', '_numbers', '_symbols'];
 
 /**
- * Pick a random letter from the subset the player still has room to level up.
- * Returns null when every letter is already at MAX_LETTER_LEVEL (all-capped).
+ * Pick a random mineable item from the subset the player still has room to level up.
+ * Returns null when every item is already at MAX_LETTER_LEVEL (all-capped).
  */
-function randomUncappedLetter(inventory) {
-  const uncapped = ALPHABET_ARR.filter((l) => (inventory[l] || 0) < MAX_LETTER_LEVEL);
+function randomUncappedItem(inventory) {
+  const uncapped = MINEABLE_POOL.filter((l) => (inventory[l] || 0) < MAX_LETTER_LEVEL);
   if (uncapped.length === 0) return null;
   return uncapped[Math.floor(Math.random() * uncapped.length)];
 }
@@ -105,7 +105,7 @@ function swing(userId, roomId = 0) {
 
     if (hit) {
       const inv          = JSON.parse(rm.inventory_json || '{}');
-      const uncapped     = randomUncappedLetter(inv);
+      const uncapped     = randomUncappedItem(inv);
 
       if (uncapped === null) {
         // Every letter is at max — award coins instead of a wasted swing

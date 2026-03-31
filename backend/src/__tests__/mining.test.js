@@ -290,9 +290,11 @@ describe('swing', () => {
     });
 
     test('all letters at cap: awards coins instead of a letter', () => {
-      // Build an inventory where every letter is at MAX_LETTER_LEVEL
+      // Build an inventory where every mineable item is at MAX_LETTER_LEVEL
       const invAll = {};
       'abcdefghijklmnopqrstuvwxyzñ'.split('').forEach((l) => { invAll[l] = MAX_LETTER_LEVEL; });
+      invAll._numbers = MAX_LETTER_LEVEL;
+      invAll._symbols = MAX_LETTER_LEVEL;
       requireUser.mockReturnValue(makeUser({ pickaxe_hits: 5, inventory_json: JSON.stringify(invAll) }));
       requireRoomMember.mockReturnValue(makeUser({ pickaxe_hits: 5, inventory_json: JSON.stringify(invAll) }));
       stmts.getRoomMember.get.mockReturnValue(makeUser({ pickaxe_hits: 4, inventory_json: JSON.stringify(invAll) }));
@@ -319,6 +321,65 @@ describe('swing', () => {
 
       expect(result.letter).toBe('a');
       expect(result.newInventory['a']).toBe(1);
+    });
+
+    test('can find _numbers when all letters are at cap', () => {
+      // Cap every letter and _symbols, leave _numbers uncapped
+      const inv = {};
+      'abcdefghijklmnopqrstuvwxyzñ'.split('').forEach((l) => { inv[l] = MAX_LETTER_LEVEL; });
+      inv._symbols = MAX_LETTER_LEVEL;
+      // _numbers not set → level 0 → uncapped
+      requireUser.mockReturnValue(makeUser({ pickaxe_hits: 5, inventory_json: JSON.stringify(inv) }));
+      requireRoomMember.mockReturnValue(makeUser({ pickaxe_hits: 5, inventory_json: JSON.stringify(inv) }));
+      stmts.getRoomMember.get.mockReturnValue(makeUser({ pickaxe_hits: 4, inventory_json: JSON.stringify(inv) }));
+      // First random: hit; second: pick _numbers (only uncapped item)
+      jest.spyOn(Math, 'random')
+        .mockReturnValueOnce(0)   // hit check
+        .mockReturnValueOnce(0);  // letter selection → first uncapped = _numbers
+
+      const result = swing(1);
+
+      expect(result.found).toBe(true);
+      expect(result.letter).toBe('_numbers');
+      expect(result.newInventory['_numbers']).toBe(1);
+    });
+
+    test('can find _symbols when all letters and _numbers are at cap', () => {
+      const inv = {};
+      'abcdefghijklmnopqrstuvwxyzñ'.split('').forEach((l) => { inv[l] = MAX_LETTER_LEVEL; });
+      inv._numbers = MAX_LETTER_LEVEL;
+      // _symbols not set → level 0 → uncapped
+      requireUser.mockReturnValue(makeUser({ pickaxe_hits: 5, inventory_json: JSON.stringify(inv) }));
+      requireRoomMember.mockReturnValue(makeUser({ pickaxe_hits: 5, inventory_json: JSON.stringify(inv) }));
+      stmts.getRoomMember.get.mockReturnValue(makeUser({ pickaxe_hits: 4, inventory_json: JSON.stringify(inv) }));
+      jest.spyOn(Math, 'random')
+        .mockReturnValueOnce(0)   // hit check
+        .mockReturnValueOnce(0);  // letter selection → first uncapped = _symbols
+
+      const result = swing(1);
+
+      expect(result.found).toBe(true);
+      expect(result.letter).toBe('_symbols');
+      expect(result.newInventory['_symbols']).toBe(1);
+    });
+
+    test('allCapped only triggers when letters, _numbers, AND _symbols are all at max', () => {
+      const inv = {};
+      'abcdefghijklmnopqrstuvwxyzñ'.split('').forEach((l) => { inv[l] = MAX_LETTER_LEVEL; });
+      // _numbers capped, _symbols NOT
+      inv._numbers = MAX_LETTER_LEVEL;
+      requireUser.mockReturnValue(makeUser({ pickaxe_hits: 5, inventory_json: JSON.stringify(inv) }));
+      requireRoomMember.mockReturnValue(makeUser({ pickaxe_hits: 5, inventory_json: JSON.stringify(inv) }));
+      stmts.getRoomMember.get.mockReturnValue(makeUser({ pickaxe_hits: 4, inventory_json: JSON.stringify(inv) }));
+      jest.spyOn(Math, 'random')
+        .mockReturnValueOnce(0)
+        .mockReturnValueOnce(0);
+
+      const result = swing(1);
+
+      // Should NOT be allCapped — _symbols is still available
+      expect(result.allCapped).toBeFalsy();
+      expect(result.letter).toBe('_symbols');
     });
   });
 });
