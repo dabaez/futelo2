@@ -16,7 +16,7 @@ import { useState, useEffect } from 'react';
 
 const CATEGORY_ORDER = ['Mensajes', 'Teclado', 'Tienda', 'Mercado', 'Mina', 'Apuestas', 'Emojis', 'Community'];
 
-export default function AchievementsModal({ isOpen, onClose, initData, chatId }) {
+export default function AchievementsModal({ isOpen, onClose, initData, chatId, refreshKey = 0 }) {
   const [achievements, setAchievements] = useState([]);
   const [loading, setLoading] = useState(false);
 
@@ -31,7 +31,7 @@ export default function AchievementsModal({ isOpen, onClose, initData, chatId })
       .then((data) => Array.isArray(data) && setAchievements(data))
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [isOpen, initData]);
+  }, [isOpen, initData, refreshKey]);
 
   if (!isOpen) return null;
 

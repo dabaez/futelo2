@@ -772,10 +772,13 @@ io.on('connection', (socket) => {
   // Drain any queued notifications accumulated while the user was offline
   const pending = stmts.getPendingNotifications.all(userId);
   if (pending.length > 0) {
+    let hadAchievement = false;
     for (const n of pending) {
       socket.emit('notification', { text: n.text, type: n.type });
+      if (n.text.includes('Logro desbloqueado')) hadAchievement = true;
     }
     stmts.markAllNotificationsDelivered.run(userId);
+    if (hadAchievement) socket.emit('achievement_unlocked');
   }
   // Prune delivered notifications older than 7 days to keep the table lean
   stmts.pruneOldNotifications.run(Math.floor(Date.now() / 1000) - 7 * 24 * 3600);
@@ -951,6 +954,7 @@ function awardAchievements(userId, roomId, event, data = {}) {
     if (newAchs.length > 0) {
       const fresh = stmts.getRoomMember.get(roomId, userId);
       if (fresh) io.to(`user:${userId}`).emit('user_update', { newCoins: fresh.coins });
+      io.to(`user:${userId}`).emit('achievement_unlocked');
     }
   } catch (err) {
     console.error(`[Achievements] user=${userId} event=${event}: ${err.message}`);

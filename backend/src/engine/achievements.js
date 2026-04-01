@@ -39,7 +39,7 @@ const ACHIEVEMENTS = [
   { id: 'messages_1000',    name: 'Inagotable',             desc: 'Envía 1000 mensajes.',                                     reward: 150, icon: '🗣️', category: 'Mensajes'  },
   { id: 'messages_3000',    name: 'Máquina del chat',       desc: 'Envía 3000 mensajes.',                                     reward: 300, icon: '📡', category: 'Mensajes'  },
   { id: 'messages_10000',   name: 'I <3 Futelo',            desc: 'Envía 10000 mensajes.',                                    reward: 500, icon: '🌐', category: 'Mensajes'  },
-  { id: 'miso',             name: '¿Sopa de Miso?',         desc: 'Menciona "miso soup" en un mensaje.',                      reward: 30,  icon: '🍜', category: 'Mensajes'  },
+  { id: 'miso',             name: '¿Sopa de Miso?',         desc: 'Menciona "miso soup" en un mensaje.',                      reward: 30,  icon: '🍜', category: 'Mensajes'  }, // matches: miso soup, misosoup, miso-soup
 
   // ── Teclado ────────────────────────────────────────────────────────────────
   { id: 'full_keyboard',    name: 'Alfabeto Completo',      desc: 'Desbloquea al menos una vez cada letra, número y símbolo.', reward: 200, icon: '⌨️', category: 'Teclado'   },
@@ -206,7 +206,7 @@ function _isMet(id, { inv, msgCnt, stats, data, emojiCount }) {
     case 'messages_1000':          return msgCnt >= 1000;
     case 'messages_3000':          return msgCnt >= 3000;
     case 'messages_10000':         return msgCnt >= 10000;
-    case 'miso':                   return (data.text || '').toLowerCase().includes('miso soup');
+    case 'miso':                   return /miso[\s-]?soup/i.test(data.text || '');
     // ── Teclado
     case 'full_keyboard':          return ALL_INVENTORY_KEYS.every((k) => (inv[k] || 0) >= 1);
     case 'double_all':             return ALL_INVENTORY_KEYS.every((k) => (inv[k] || 0) >= 2);
@@ -278,7 +278,7 @@ function _isMet(id, { inv, msgCnt, stats, data, emojiCount }) {
 function backfillAchievements() {
   // Prepare statements once, outside the per-user/room loop
   const getUserRooms      = db.prepare('SELECT DISTINCT user_id, room_id FROM room_members WHERE room_id != 0');
-  const misoCheck         = db.prepare("SELECT 1 FROM messages WHERE user_id = ? AND lower(text) LIKE '%miso soup%' LIMIT 1");
+  const misoCheck         = db.prepare("SELECT 1 FROM messages WHERE user_id = ? AND (lower(text) LIKE '%miso soup%' OR lower(text) LIKE '%misosoup%' OR lower(text) LIKE '%miso-soup%') LIMIT 1");
   const mktBoughtCnt      = db.prepare("SELECT COUNT(*) as cnt FROM market_listings WHERE buyer_id = ? AND status = 'sold' AND room_id = ?");
   const mktSoldCnt        = db.prepare("SELECT COUNT(*) as cnt FROM market_listings WHERE seller_id = ? AND status = 'sold' AND room_id = ?");
   const bmBought          = db.prepare("SELECT 1 FROM black_market_listings WHERE buyer_id = ? AND status = 'sold' AND room_id = ? LIMIT 1");

@@ -53,6 +53,7 @@ export default function App() {
   const [lotteryOpen, setLotteryOpen] = useState(false);
   const [forgeOpen,   setForgeOpen]   = useState(false);
   const [achievementsOpen, setAchievementsOpen] = useState(false);
+  const [achievementsKey,  setAchievementsKey]  = useState(0);
   const [toast,     setToast]     = useState(null); // { text, type }
 
   // ── Emoji forge state ────────────────────────────────────────────────────
@@ -264,6 +265,9 @@ export default function App() {
     };
     socket.on('emoji_complete', onEmojiComplete);
 
+    const onAchievementUnlocked = () => setAchievementsKey((k) => k + 1);
+    socket.on('achievement_unlocked', onAchievementUnlocked);
+
     return () => {
       socket.off('user_update',      onUpdate);
       socket.off('rejected_message', onRejected);
@@ -277,6 +281,7 @@ export default function App() {
       socket.off('prompt_error',      onPromptError);
       socket.off('notification',      onNotification);
       socket.off('emoji_complete',     onEmojiComplete);
+      socket.off('achievement_unlocked', onAchievementUnlocked);
     };
   }, [socket, updateUser]);
 
@@ -559,6 +564,7 @@ export default function App() {
         onClose={() => setAchievementsOpen(false)}
         initData={initData}
         chatId={chatId}
+        refreshKey={achievementsKey}
       />
       {/* ── Toast notification ──────────────────────────────────────────── */}
       {toast && (
