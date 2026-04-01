@@ -42,6 +42,7 @@ export function useAuth(initData) {
           ...data.user,
           pickaxeHits: data.user.pickaxe_hits ?? 0,
           goldLevel:   data.user.goldLevel ?? 0,
+          goldActive:  data.user.goldActive ?? 1,
         });
         setChatId(data.chatId ?? 0);
       })
@@ -63,6 +64,7 @@ export function useAuth(initData) {
         pickaxeHits:        patch.pickaxeHits        ?? prev.pickaxeHits,
         allows_write_to_pm: patch.allows_write_to_pm ?? prev.allows_write_to_pm,
         goldLevel:          patch.goldLevel          ?? prev.goldLevel,
+        goldActive:         patch.goldActive         ?? prev.goldActive,
       };
     });
   }, []);

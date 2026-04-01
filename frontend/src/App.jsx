@@ -529,6 +529,7 @@ export default function App() {
         inventory={inventory}
         pickaxeHits={user?.pickaxeHits ?? 0}
         goldLevel={user?.goldLevel ?? 0}
+        goldActive={user?.goldActive ?? 1}
         onPurchase={handlePurchase}
         onPromptFired={handlePromptFired}
         socket={socket}

@@ -261,6 +261,7 @@ app.post('/api/auth', authMiddleware, (req, res) => {
       lockedLetters: locks.map((l) => l.letter),
       pickaxe_hits: rm.pickaxe_hits,
       goldLevel:    rm.futelo_gold_level ?? 0,
+      goldActive:   rm.futelo_gold_active ?? 1,
     },
   });
 });
@@ -283,6 +284,7 @@ app.get('/api/me', authMiddleware, (req, res) => {
     lockedLetters: locks.map((l) => l.letter),
     pickaxe_hits: rm.pickaxe_hits,
     goldLevel:    rm.futelo_gold_level ?? 0,
+    goldActive:   rm.futelo_gold_active ?? 1,
   });
 });
 
@@ -320,7 +322,7 @@ app.post('/api/message', authMiddleware, (req, res) => {
     // Broadcast via Socket.io to the room
     const user = requireUser(req.tgUser.id);
     const rm   = stmts.getRoomMember.get(roomId, req.tgUser.id);
-    const payload = buildMessagePayload(user, text, result, rm?.futelo_gold_level ?? 0);
+    const payload = buildMessagePayload(user, text, result, (rm?.futelo_gold_active !== 0 ? rm?.futelo_gold_level ?? 0 : 0));
     io.to(`room:${roomId}`).emit('new_message', payload);
 
     // Mirror to Telegram thread if configured
@@ -734,6 +736,26 @@ app.post('/api/gold/upgrade', authMiddleware, (req, res) => {
   }
 });
 
+// POST /api/gold/toggle – toggle GOLD visibility on/off for the caller
+// Not date-gated: user can hide/show their GOLD styling at any time.
+app.post('/api/gold/toggle', authMiddleware, (req, res) => {
+  const userId = req.tgUser.id;
+  const roomId = req.chatId;
+  try {
+    const rm = requireRoomMember(userId, roomId);
+    if ((rm.futelo_gold_level ?? 0) === 0) {
+      return res.status(400).json({ error: 'No tienes Futelo GOLD.' });
+    }
+    stmts.toggleGoldActive.run(roomId, userId);
+    const refreshed   = requireRoomMember(userId, roomId);
+    const goldActive  = refreshed.futelo_gold_active;
+    io.to(`user:${userId}`).emit('user_update', { goldActive });
+    res.json({ success: true, goldActive });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // GET /api/achievements – full catalogue with earned flag for the caller
 app.get('/api/achievements', authMiddleware, (req, res) => {
   try {
@@ -836,7 +858,7 @@ io.on('connection', (socket) => {
       const result  = processMessage(userId, text, roomId);
       const user    = requireUser(userId);
       const rm      = stmts.getRoomMember.get(roomId, userId);
-      const payload = buildMessagePayload(user, text, result, rm?.futelo_gold_level ?? 0);
+      const payload = buildMessagePayload(user, text, result, (rm?.futelo_gold_active !== 0 ? rm?.futelo_gold_level ?? 0 : 0));
 
       // Broadcast to all connected clients in the same room
       io.to(`room:${roomId}`).emit('new_message', payload);

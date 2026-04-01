@@ -130,7 +130,7 @@ export default function MessageBubble({ message, isOwn, socket, myReaction, onRe
         {goldLevel > 0 && (
           <span
             className={`font-black text-yellow-400 break-words ${isOwn ? 'mr-1 text-right' : 'ml-1'}`}
-            style={{ fontSize: `${8 + goldLevel * 2}px` }}
+            style={{ fontSize: `${8 + Math.floor(goldLevel / 5)}px` }}
           >
             Esta persona tiene Futelo GOLD
           </span>

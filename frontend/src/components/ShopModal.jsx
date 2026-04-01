@@ -101,6 +101,7 @@ export default function ShopModal({
   inventory,
   pickaxeHits: initialPickaxeHits = 0,
   goldLevel: initialGoldLevel = 0,
+  goldActive: initialGoldActive = 1,
   onPurchase,
   onPromptFired,
   socket,
@@ -116,10 +117,13 @@ export default function ShopModal({
 
   // ── Futelo GOLD tab state ────────────────────────────────────────────────
   const [localGoldLevel, setLocalGoldLevel] = useState(initialGoldLevel);
-  const [goldBuying, setGoldBuying]         = useState(false);
-  const [goldError,  setGoldError]          = useState(null);
+  const [localGoldActive, setLocalGoldActive] = useState(initialGoldActive);
+  const [goldBuying,   setGoldBuying]         = useState(false);
+  const [goldToggling, setGoldToggling]       = useState(false);
+  const [goldError,    setGoldError]          = useState(null);
   // Keep in sync when parent updates (e.g. socket user_update)
   useEffect(() => { setLocalGoldLevel(initialGoldLevel); }, [initialGoldLevel]);
+  useEffect(() => { setLocalGoldActive(initialGoldActive); }, [initialGoldActive]);
 
   // ── Config from server ───────────────────────────────────────────────────
   const [cfg, setCfg] = useState({
@@ -1146,12 +1150,45 @@ export default function ShopModal({
                   <p className="text-xs text-tg-hint mt-1">
                     Tus mensajes tienen borde dorado y el texto
                     {' '}
-                    <span style={{ fontSize: `${Math.min(10 + localGoldLevel * 2, 40)}px` }}
+                    <span style={{ fontSize: `${10 + Math.floor(localGoldLevel / 5)}px` }}
                           className="text-yellow-400 font-bold">
                       Esta persona tiene Futelo GOLD
                     </span>
                     {' '}aparece junto a tu nombre.
                   </p>
+                  {/* Active toggle */}
+                  <div className="flex items-center justify-between mt-3 pt-3 border-t border-yellow-400/20">
+                    <p className="text-xs text-tg-hint">{localGoldActive ? 'GOLD visible para todos' : 'GOLD oculto'}</p>
+                    <button
+                      onClick={async () => {
+                        if (goldToggling) return;
+                        setGoldToggling(true);
+                        setGoldError(null);
+                        try {
+                          const r = await fetch('/api/gold/toggle', {
+                            method: 'POST',
+                            headers: { 'x-init-data': initData || '' },
+                          });
+                          const data = await safeJson(r);
+                          if (!r.ok) throw new Error(data?.error || 'Error al procesar.');
+                          setLocalGoldActive(data.goldActive);
+                        } catch (e) {
+                          setGoldError(e.message);
+                        } finally {
+                          setGoldToggling(false);
+                        }
+                      }}
+                      disabled={goldToggling}
+                      aria-label={localGoldActive ? 'Desactivar GOLD' : 'Activar GOLD'}
+                      className={`relative w-10 h-6 rounded-full transition-colors duration-200 disabled:opacity-50 flex-shrink-0 ${
+                        localGoldActive ? 'bg-yellow-400' : 'bg-tg-bg-sec border border-tg-hint/30'
+                      }`}
+                    >
+                      <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${
+                        localGoldActive ? 'translate-x-5' : 'translate-x-1'
+                      }`} />
+                    </button>
+                  </div>
                 </div>
               )}
 

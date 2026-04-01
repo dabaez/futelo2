@@ -98,7 +98,7 @@ db.exec(`
 // Migrations never need to be run manually — they apply automatically on startup.
 //
 // IMPORTANT: never edit a past migration. Always append a new one.
-const SCHEMA_VERSION = 21;
+const SCHEMA_VERSION = 22;
 
 const migrations = [
   // ── v1: P2P letter market ─────────────────────────────────────────────────
@@ -571,6 +571,12 @@ const migrations = [
     db.exec(`ALTER TABLE room_members ADD COLUMN futelo_gold_level INTEGER NOT NULL DEFAULT 0`);
     db.exec(`ALTER TABLE user_stats ADD COLUMN gold_upgrades INTEGER NOT NULL DEFAULT 0`);
   },
+
+  // v22 – Futelo GOLD active toggle
+  // futelo_gold_active: 1 = show gold styling to others (default), 0 = hidden.
+  () => {
+    db.exec(`ALTER TABLE room_members ADD COLUMN futelo_gold_active INTEGER NOT NULL DEFAULT 1`);
+  },
 ];
 
 // Apply any pending migrations inside a single transaction so a crash mid-way
@@ -616,7 +622,7 @@ const stmts = {
            u.id AS user_id, u.username, u.first_name, u.photo_url,
            COALESCE((SELECT COUNT(*) FROM message_reactions WHERE message_id = m.id AND reaction = 'like'), 0)    AS likes,
            COALESCE((SELECT COUNT(*) FROM message_reactions WHERE message_id = m.id AND reaction = 'dislike'), 0) AS dislikes,
-           COALESCE(rm.futelo_gold_level, 0) AS gold_level
+           CASE WHEN COALESCE(rm.futelo_gold_active, 1) = 1 THEN COALESCE(rm.futelo_gold_level, 0) ELSE 0 END AS gold_level
     FROM messages m
     JOIN users u ON u.id = m.user_id
     LEFT JOIN room_members rm ON rm.user_id = m.user_id AND rm.room_id = m.room_id
@@ -889,6 +895,9 @@ const stmts = {
   ),
   statGoldUpgrade: db.prepare(
     'UPDATE user_stats SET gold_upgrades = gold_upgrades + 1 WHERE user_id = ? AND room_id = ?'
+  ),
+  toggleGoldActive: db.prepare(
+    'UPDATE room_members SET futelo_gold_active = CASE WHEN futelo_gold_active = 1 THEN 0 ELSE 1 END WHERE room_id = ? AND user_id = ?'
   ),
 
   // ── Achievements ─────────────────────────────────────────────────────────────
