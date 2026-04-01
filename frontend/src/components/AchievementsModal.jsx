@@ -14,7 +14,7 @@ import { useState, useEffect } from 'react';
  *   chatId    – number
  */
 
-const CATEGORY_ORDER = ['Mensajes', 'Teclado', 'Tienda', 'Mercado', 'Mina', 'Apuestas', 'Emojis', 'Community'];
+const CATEGORY_ORDER = ['Mensajes', 'Teclado', 'Tienda', 'Mercado', 'Mina', 'Apuestas', 'Emojis', 'Community', 'Especial'];
 
 export default function AchievementsModal({ isOpen, onClose, initData, chatId, refreshKey = 0 }) {
   const [achievements, setAchievements] = useState([]);
