@@ -1184,8 +1184,8 @@ export default function ShopModal({
                         localGoldActive ? 'bg-yellow-400' : 'bg-tg-bg-sec border border-tg-hint/30'
                       }`}
                     >
-                      <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${
-                        localGoldActive ? 'translate-x-5' : 'translate-x-1'
+                      <span className={`absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-white shadow transition-all duration-200 ${
+                        localGoldActive ? 'left-[22px]' : 'left-[2px]'
                       }`} />
                     </button>
                   </div>
