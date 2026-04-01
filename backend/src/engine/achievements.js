@@ -98,6 +98,10 @@ const ACHIEVEMENTS = [
   { id: 'prompt_vote_winner',    name: 'Gusto popular',               desc: 'Vota por la respuesta con más votos.',               reward: 15,  icon: '👍', category: 'Community' },
   { id: 'prompt_vote_winner_10', name: 'Yo entiendo al pueblo',       desc: 'Vota por la respuesta con más votos 10 veces.',      reward: 75,  icon: '🫵', category: 'Community' },
   { id: 'prompt_win_2nd',        name: 'Segundo lugar es el primer perdedor', desc: 'Queda segundo en una votación de Community.', reward: 30,  icon: '🥈', category: 'Community' },
+
+  // ── Especial (April Fools 2026) ────────────────────────────────────────────
+  { id: 'gold_buy',       name: 'Primeras 24 Quilates', desc: 'Compra Futelo GOLD.',            reward: 10, icon: '🥇', category: 'Especial' },
+  { id: 'gold_centurion', name: 'Centurión de Oro',     desc: 'Mejora Futelo GOLD 100 veces.',  reward: 50, icon: '💛', category: 'Especial' },
 ];
 
 // Achievements eligible to be checked for each event type
@@ -123,6 +127,8 @@ const EVENT_CHECKS = {
   prompt_runner_up: ['prompt_win_2nd'],
   prompt_vote_win:  ['prompt_vote_winner', 'prompt_vote_winner_10'],
   prompt_vote_only: ['prompt_vote_loser'],
+  gold_buy:         ['gold_buy'],
+  gold_upgrade:     ['gold_centurion'],
 };
 
 /**
@@ -162,6 +168,8 @@ function checkAchievements(userId, roomId, event, data = {}) {
     stmts.statPromptWin.run(userId, roomId);
   } else if (event === 'prompt_vote_win') {
     stmts.statPromptCorrectVote.run(userId, roomId);
+  } else if (event === 'gold_upgrade') {
+    stmts.statGoldUpgrade.run(userId, roomId);
   }
 
   // ── Read current state ─────────────────────────────────────────────────────
@@ -259,6 +267,9 @@ function _isMet(id, { inv, msgCnt, stats, data, emojiCount }) {
     case 'prompt_vote_winner':     return true;
     case 'prompt_vote_winner_10':  return (stats.prompt_correct_votes       || 0) >= 10;
     case 'prompt_vote_loser':      return true;
+    // ── Especial (Futelo GOLD)
+    case 'gold_buy':               return true;
+    case 'gold_centurion':         return (stats.gold_upgrades              || 0) >= 100;
     default:                       return false;
   }
 }

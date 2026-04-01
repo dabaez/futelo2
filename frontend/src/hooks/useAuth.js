@@ -41,6 +41,7 @@ export function useAuth(initData) {
         setUser({
           ...data.user,
           pickaxeHits: data.user.pickaxe_hits ?? 0,
+          goldLevel:   data.user.goldLevel ?? 0,
         });
         setChatId(data.chatId ?? 0);
       })
@@ -61,6 +62,7 @@ export function useAuth(initData) {
           : prev.lockedLetters,
         pickaxeHits:        patch.pickaxeHits        ?? prev.pickaxeHits,
         allows_write_to_pm: patch.allows_write_to_pm ?? prev.allows_write_to_pm,
+        goldLevel:          patch.goldLevel          ?? prev.goldLevel,
       };
     });
   }, []);

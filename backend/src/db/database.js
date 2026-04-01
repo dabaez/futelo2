@@ -98,7 +98,7 @@ db.exec(`
 // Migrations never need to be run manually — they apply automatically on startup.
 //
 // IMPORTANT: never edit a past migration. Always append a new one.
-const SCHEMA_VERSION = 20;
+const SCHEMA_VERSION = 21;
 
 const migrations = [
   // ── v1: P2P letter market ─────────────────────────────────────────────────
@@ -562,6 +562,15 @@ const migrations = [
       CREATE INDEX IF NOT EXISTS idx_eh_user ON emoji_hints(user_id);
     `);
   },
+
+  // v21 – Futelo GOLD (April Fools feature, April 1 2026)
+  // futelo_gold_level on room_members: 0 = not purchased, N = number of upgrades.
+  // gold_upgrades on user_stats: running counter for the centurion achievement.
+  // Both columns persist permanently so achievements survive after the feature ends.
+  () => {
+    db.exec(`ALTER TABLE room_members ADD COLUMN futelo_gold_level INTEGER NOT NULL DEFAULT 0`);
+    db.exec(`ALTER TABLE user_stats ADD COLUMN gold_upgrades INTEGER NOT NULL DEFAULT 0`);
+  },
 ];
 
 // Apply any pending migrations inside a single transaction so a crash mid-way
@@ -606,9 +615,11 @@ const stmts = {
     SELECT m.id, m.text, m.coin_delta, m.created_at,
            u.id AS user_id, u.username, u.first_name, u.photo_url,
            COALESCE((SELECT COUNT(*) FROM message_reactions WHERE message_id = m.id AND reaction = 'like'), 0)    AS likes,
-           COALESCE((SELECT COUNT(*) FROM message_reactions WHERE message_id = m.id AND reaction = 'dislike'), 0) AS dislikes
+           COALESCE((SELECT COUNT(*) FROM message_reactions WHERE message_id = m.id AND reaction = 'dislike'), 0) AS dislikes,
+           COALESCE(rm.futelo_gold_level, 0) AS gold_level
     FROM messages m
     JOIN users u ON u.id = m.user_id
+    LEFT JOIN room_members rm ON rm.user_id = m.user_id AND rm.room_id = m.room_id
     WHERE m.room_id = ?
     ORDER BY m.created_at DESC, m.id DESC
     LIMIT ?
@@ -871,6 +882,14 @@ const stmts = {
     JOIN users u ON u.id = rms.user_id
     WHERE rms.room_id = ? AND rms.user_id != ? AND u.allows_write_to_pm = 1
   `),
+
+  // ── Futelo GOLD ──────────────────────────────────────────────────────────────
+  incrementGoldLevel: db.prepare(
+    'UPDATE room_members SET futelo_gold_level = futelo_gold_level + 1 WHERE room_id = ? AND user_id = ?'
+  ),
+  statGoldUpgrade: db.prepare(
+    'UPDATE user_stats SET gold_upgrades = gold_upgrades + 1 WHERE user_id = ? AND room_id = ?'
+  ),
 
   // ── Achievements ─────────────────────────────────────────────────────────────
   getEarnedAchievements: db.prepare(

@@ -371,6 +371,10 @@ module.exports = {
     "Minecraft",
     "League of Legends",
   ],
+  // ── Futelo GOLD (April Fools – only active April 1 2026) ──────────────────
+  /** Coin cost to buy or upgrade Futelo GOLD (initial purchase and every upgrade). */
+  FUTELO_GOLD_COST: 1,
+
   PROMPT_POOL: [
     "Describe tu dia en un futelo",
     "Que desayunaste hoy?",

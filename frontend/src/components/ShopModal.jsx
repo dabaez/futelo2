@@ -100,12 +100,26 @@ export default function ShopModal({
   coins,
   inventory,
   pickaxeHits: initialPickaxeHits = 0,
+  goldLevel: initialGoldLevel = 0,
   onPurchase,
   onPromptFired,
   socket,
 }) {
   // ── Tab state ────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState('roll');
+
+  // ── April Fools date gate (April 1, 2026) ────────────────────────────────
+  const isAprilFools = (() => {
+    const d = new Date();
+    return d.getFullYear() === 2026 && d.getMonth() === 3 && d.getDate() === 1;
+  })();
+
+  // ── Futelo GOLD tab state ────────────────────────────────────────────────
+  const [localGoldLevel, setLocalGoldLevel] = useState(initialGoldLevel);
+  const [goldBuying, setGoldBuying]         = useState(false);
+  const [goldError,  setGoldError]          = useState(null);
+  // Keep in sync when parent updates (e.g. socket user_update)
+  useEffect(() => { setLocalGoldLevel(initialGoldLevel); }, [initialGoldLevel]);
 
   // ── Config from server ───────────────────────────────────────────────────
   const [cfg, setCfg] = useState({
@@ -253,6 +267,7 @@ export default function ShopModal({
       setSwingResult(null);
       setSwingState('idle');
       setTapCount(0);
+      setGoldError(null);
       cancelAnimationFrame(spinRafRef.current);
     }
   }, [isOpen]);
@@ -518,6 +533,7 @@ export default function ShopModal({
     { id: 'sell',   label: '💰' },
     { id: 'prompt', label: '📣' },
     { id: 'mine',   label: '⛏️' },
+    ...(isAprilFools ? [{ id: 'gold', label: '✨' }] : []),
   ];
 
   return (
@@ -1106,6 +1122,90 @@ export default function ShopModal({
                   </button>
                 </>
               )}
+            </div>
+          )}
+
+          {/* ── ✨ Futelo GOLD tab (April 1, 2026 only) ─────────────────── */}
+          {activeTab === 'gold' && isAprilFools && (
+            <div className="flex flex-col gap-5">
+
+              {/* Title */}
+              <div className="text-center">
+                <p className="text-2xl font-black tracking-wide"
+                   style={{ color: '#FFD700', textShadow: '0 0 12px #FFD70088' }}>
+                  ✨ Futelo GOLD ✨
+                </p>
+                <p className="text-xs text-tg-hint mt-1">Edición especial — 1 de abril de 2026</p>
+              </div>
+
+              {/* Current level */}
+              {localGoldLevel > 0 && (
+                <div className="rounded-2xl border-2 border-yellow-400 bg-yellow-400/10 p-4 text-center flex flex-col gap-1">
+                  <p className="text-xs text-yellow-400 font-semibold uppercase tracking-widest">Tu nivel actual</p>
+                  <p className="text-4xl font-black text-yellow-300">Nivel {localGoldLevel}</p>
+                  <p className="text-xs text-tg-hint mt-1">
+                    Tus mensajes tienen borde dorado y el texto
+                    {' '}
+                    <span style={{ fontSize: `${Math.min(10 + localGoldLevel * 2, 40)}px` }}
+                          className="text-yellow-400 font-bold">
+                      Esta persona tiene Futelo GOLD
+                    </span>
+                    {' '}aparece junto a tu nombre.
+                  </p>
+                </div>
+              )}
+
+              {/* What you get card (only for first purchase) */}
+              {localGoldLevel === 0 && (
+                <div className="rounded-xl bg-tg-bg-sec border border-yellow-500/30 p-4 flex flex-col gap-2 text-sm text-tg-hint">
+                  <p className="font-semibold text-tg-text">¿Qué incluye Futelo GOLD?</p>
+                  <p>✅ Borde dorado en todos tus mensajes</p>
+                  <p>✅ El texto <span className="text-yellow-400 font-bold text-xs">Esta persona tiene Futelo GOLD</span> junto a tu nombre</p>
+                  <p>✅ Cuanto más mejores, más grande y molesto se vuelve el texto</p>
+                  <p className="text-[10px] opacity-60 mt-1">* Solo disponible hoy, 1 de abril de 2026. Los logros se mantienen para siempre.</p>
+                </div>
+              )}
+
+              {/* Buy/Upgrade button */}
+              <button
+                onClick={async () => {
+                  if (goldBuying || coins < 1) return;
+                  setGoldBuying(true);
+                  setGoldError(null);
+                  try {
+                    const r = await fetch('/api/gold/upgrade', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', 'x-init-data': initData || '' },
+                    });
+                    const data = await safeJson(r);
+                    if (!r.ok) throw new Error(data?.error || 'Error al procesar.');
+                    setLocalGoldLevel(data.goldLevel);
+                    onPurchase?.({ newCoins: data.newCoins });
+                  } catch (e) {
+                    setGoldError(e.message);
+                  } finally {
+                    setGoldBuying(false);
+                  }
+                }}
+                disabled={goldBuying || coins < 1}
+                className="w-full py-3 rounded-2xl font-black text-base active:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ background: 'linear-gradient(135deg, #FFD700, #FFA500)', color: '#000' }}
+              >
+                {goldBuying
+                  ? '…'
+                  : localGoldLevel === 0
+                    ? '✨ Comprar Futelo GOLD — 1 🪙'
+                    : `✨ Mejorar a Nivel ${localGoldLevel + 1} — 1 🪙`}
+              </button>
+
+              {goldError && (
+                <p className="text-xs text-red-500 text-center">{goldError}</p>
+              )}
+
+              {coins < 1 && (
+                <p className="text-xs text-tg-hint text-center">Necesitas al menos 1 🪙 para continuar.</p>
+              )}
+
             </div>
           )}
 

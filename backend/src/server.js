@@ -228,6 +228,8 @@ app.get('/api/config', (_req, res) => {
     // ── Emoji Forge ──
     HINT_COST:                     config.HINT_COST,
     EMOJI_DEFS: config.EMOJI_RECIPES.map(({ key, emoji, name }) => ({ key, emoji, name })),
+    // ── Futelo GOLD ──
+    FUTELO_GOLD_COST:              config.FUTELO_GOLD_COST,
     // ── Black market heat (live values) ──
     BM_HEAT_MAX:            config.BM_HEAT_MAX,
     BM_BASE_CATCH_PROB:     config.BM_BASE_CATCH_PROB,
@@ -258,6 +260,7 @@ app.post('/api/auth', authMiddleware, (req, res) => {
       streak:       user.streak_count,
       lockedLetters: locks.map((l) => l.letter),
       pickaxe_hits: rm.pickaxe_hits,
+      goldLevel:    rm.futelo_gold_level ?? 0,
     },
   });
 });
@@ -279,6 +282,7 @@ app.get('/api/me', authMiddleware, (req, res) => {
     streak:       user.streak_count,
     lockedLetters: locks.map((l) => l.letter),
     pickaxe_hits: rm.pickaxe_hits,
+    goldLevel:    rm.futelo_gold_level ?? 0,
   });
 });
 
@@ -300,6 +304,7 @@ app.get('/api/messages', (req, res) => {
       photoUrl:   r.photo_url,
       likes:      r.likes,
       dislikes:   r.dislikes,
+      goldLevel:  r.gold_level ?? 0,
     }))
   );
 });
@@ -314,7 +319,8 @@ app.post('/api/message', authMiddleware, (req, res) => {
 
     // Broadcast via Socket.io to the room
     const user = requireUser(req.tgUser.id);
-    const payload = buildMessagePayload(user, text, result);
+    const rm   = stmts.getRoomMember.get(roomId, req.tgUser.id);
+    const payload = buildMessagePayload(user, text, result, rm?.futelo_gold_level ?? 0);
     io.to(`room:${roomId}`).emit('new_message', payload);
 
     // Mirror to Telegram thread if configured
@@ -687,6 +693,47 @@ app.post('/api/notifications/enable', authMiddleware, (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Futelo GOLD (April Fools – only active April 1 2026) ───────────────────
+// Returns true only on April 1, 2026 in server local time.
+function isAprilFools() {
+  const d = new Date();
+  return d.getFullYear() === 2026 && d.getMonth() === 3 && d.getDate() === 1;
+}
+
+// POST /api/gold/upgrade – buy or upgrade Futelo GOLD (costs 1 coin each time)
+// First call: gold_level 0 → 1 (purchase). Subsequent calls: increment.
+// Both fire achievement checks; only the first purchase fires 'gold_buy'.
+// The endpoint is date-gated: returns 403 on any day other than April 1, 2026.
+app.post('/api/gold/upgrade', authMiddleware, (req, res) => {
+  if (!isAprilFools()) {
+    return res.status(403).json({ error: 'Futelo GOLD solo está disponible el 1 de abril de 2026.' });
+  }
+  const userId = req.tgUser.id;
+  const roomId = req.chatId;
+  try {
+    const rm = requireRoomMember(userId, roomId);
+    if (rm.coins < config.FUTELO_GOLD_COST) {
+      return res.status(400).json({ error: 'Monedas insuficientes.' });
+    }
+    const isFirstPurchase = (rm.futelo_gold_level ?? 0) === 0;
+    db.transaction(() => {
+      stmts.updateRoomCoins.run(-config.FUTELO_GOLD_COST, roomId, userId);
+      stmts.incrementGoldLevel.run(roomId, userId);
+    })();
+    const refreshed = requireRoomMember(userId, roomId);
+    const goldLevel = refreshed.futelo_gold_level;
+    io.to(`user:${userId}`).emit('user_update', {
+      newCoins:  refreshed.coins,
+      goldLevel,
+    });
+    if (isFirstPurchase) awardAchievements(userId, roomId, 'gold_buy', {});
+    awardAchievements(userId, roomId, 'gold_upgrade', {});
+    res.json({ success: true, goldLevel, newCoins: refreshed.coins });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // GET /api/achievements – full catalogue with earned flag for the caller
 app.get('/api/achievements', authMiddleware, (req, res) => {
   try {
@@ -788,7 +835,8 @@ io.on('connection', (socket) => {
     try {
       const result  = processMessage(userId, text, roomId);
       const user    = requireUser(userId);
-      const payload = buildMessagePayload(user, text, result);
+      const rm      = stmts.getRoomMember.get(roomId, userId);
+      const payload = buildMessagePayload(user, text, result, rm?.futelo_gold_level ?? 0);
 
       // Broadcast to all connected clients in the same room
       io.to(`room:${roomId}`).emit('new_message', payload);
@@ -891,7 +939,7 @@ io.on('connection', (socket) => {
 });
 
 // ── Build message payload ──────────────────────────────────────────────────
-function buildMessagePayload(user, text, result) {
+function buildMessagePayload(user, text, result, goldLevel = 0) {
   return {
     id:          result.messageId,
     userId:      user.id,
@@ -906,6 +954,7 @@ function buildMessagePayload(user, text, result) {
     createdAt:   Math.floor(Date.now() / 1000),
     likes:       0,
     dislikes:    0,
+    goldLevel,
   };
 }
 

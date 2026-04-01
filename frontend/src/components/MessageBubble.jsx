@@ -48,6 +48,13 @@ export default function MessageBubble({ message, isOwn, socket, myReaction, onRe
   const [reactionMenuOpen, setReactionMenuOpen] = React.useState(false);
   const holdTimerRef = React.useRef(null);
 
+  // April Fools 2026: show gold styling only on April 1, 2026
+  const isAprilFools = (() => {
+    const d = new Date();
+    return d.getFullYear() === 2026 && d.getMonth() === 3 && d.getDate() === 1;
+  })();
+  const goldLevel = (isAprilFools && message.goldLevel) ? message.goldLevel : 0;
+
   function startHold(e) {
     // Only trigger on primary pointer (not right-click)
     if (e.button !== undefined && e.button !== 0) return;
@@ -112,10 +119,20 @@ export default function MessageBubble({ message, isOwn, socket, myReaction, onRe
       )}
 
       <div className={`max-w-[78%] flex flex-col ${isOwn ? 'items-end' : 'items-start'}`}>
-        {/* Sender name */}
+        {/* Sender name (other messages only) */}
         {!isOwn && (
           <span className="text-xs font-semibold text-tg-link mb-0.5 ml-1">
             {message.username ? `@${message.username}` : message.firstName}
+          </span>
+        )}
+
+        {/* Futelo GOLD label — shown for everyone when gold level > 0 */}
+        {goldLevel > 0 && (
+          <span
+            className={`font-black text-yellow-400 break-words ${isOwn ? 'mr-1 text-right' : 'ml-1'}`}
+            style={{ fontSize: `${8 + goldLevel * 2}px` }}
+          >
+            Esta persona tiene Futelo GOLD
           </span>
         )}
 
@@ -127,6 +144,7 @@ export default function MessageBubble({ message, isOwn, socket, myReaction, onRe
               ? 'bg-tg-button text-tg-btn-text rounded-tr-sm'
               : 'bg-tg-bg-sec text-tg-text rounded-tl-sm'}
           `}
+          style={goldLevel > 0 ? { outline: '2px solid #FFD700', outlineOffset: '1px' } : undefined}
           onPointerDown={(!isOwn && !myReaction) ? startHold : undefined}
           onPointerUp={(!isOwn && !myReaction) ? cancelHold : undefined}
           onPointerLeave={(!isOwn && !myReaction) ? cancelHold : undefined}
