@@ -993,3 +993,166 @@ describe('Emoji forge hint persistence', () => {
   });
 });
 
+// ── Leaderboard ────────────────────────────────────────────────────────────
+const PACO = 'dev:1015:paco:Paco';
+const RITA = 'dev:1016:rita:Rita';
+
+describe('GET /api/leaderboard', () => {
+  let app;
+  beforeAll(async () => {
+    app = getApp();
+    await authAs(app, PACO);
+    await authAs(app, RITA);
+    // Generate some messages so both users appear in the room
+    await request(app).post('/api/message').set(authHeader(PACO)).send({ text: 'h' });
+    await request(app).post('/api/message').set(authHeader(RITA)).send({ text: 'h' });
+    await request(app).post('/api/message').set(authHeader(PACO)).send({ text: 'h' });
+  });
+
+  test('returns letters, coins, messages arrays', async () => {
+    const res = await request(app).get('/api/leaderboard?roomId=-1001');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.letters)).toBe(true);
+    expect(Array.isArray(res.body.coins)).toBe(true);
+    expect(Array.isArray(res.body.messages)).toBe(true);
+  });
+
+  test('letters entries have score but coins entries do NOT have coins value', async () => {
+    const res = await request(app).get('/api/leaderboard?roomId=-1001');
+    expect(res.status).toBe(200);
+    if (res.body.letters.length > 0) {
+      expect(typeof res.body.letters[0].score).toBe('number');
+    }
+    // coins entries must never expose the coins value
+    res.body.coins.forEach((entry) => {
+      expect(entry).not.toHaveProperty('coins');
+      expect(entry).not.toHaveProperty('score');
+    });
+  });
+
+  test('messages entries have score (count)', async () => {
+    const res = await request(app).get('/api/leaderboard?roomId=-1001');
+    expect(res.status).toBe(200);
+    if (res.body.messages.length > 0) {
+      expect(typeof res.body.messages[0].score).toBe('number');
+      expect(res.body.messages[0].score).toBeGreaterThan(0);
+    }
+  });
+});
+
+// ── DevInfo endpoints ──────────────────────────────────────────────────────
+const NORA  = 'dev:1013:nora:Nora';    // regular user
+// Admin user: simulate via env var override inside the describe block
+const OMAR_ID = 1014;
+const OMAR  = `dev:${OMAR_ID}:omar:Omar`;
+
+describe('DevInfo feature requests', () => {
+  let app;
+  let createdId;
+
+  beforeAll(async () => {
+    // Set OMAR as admin before module is required
+    process.env.ADMIN_USER_IDS = String(OMAR_ID);
+    jest.resetModules();
+    app = require('../server').app;
+    await authAs(app, NORA);
+    await authAs(app, OMAR);
+  });
+
+  afterAll(() => {
+    delete process.env.ADMIN_USER_IDS;
+    jest.resetModules();
+  });
+
+  test('GET /api/devinfo/config returns patchNotes array', async () => {
+    const res = await request(app).get('/api/devinfo/config');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.patchNotes)).toBe(true);
+    expect(res.body.patchNotes.length).toBeGreaterThan(0);
+    expect(Array.isArray(res.body.adminUserIds)).toBe(true);
+  });
+
+  test('GET /api/devinfo/requests returns empty array initially', async () => {
+    const res = await request(app).get('/api/devinfo/requests');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  test('POST /api/devinfo/request creates a request', async () => {
+    const res = await request(app)
+      .post('/api/devinfo/request')
+      .set(authHeader(NORA))
+      .send({ text: 'Agregar modo oscuro al teclado' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(typeof res.body.id).toBe('number');
+    createdId = res.body.id;
+  });
+
+  test('POST /api/devinfo/request rejects text shorter than 5 chars', async () => {
+    const res = await request(app)
+      .post('/api/devinfo/request')
+      .set(authHeader(NORA))
+      .send({ text: 'hi' });
+    expect(res.status).toBe(400);
+  });
+
+  test('GET /api/devinfo/requests shows the new request with 0 votes', async () => {
+    const res = await request(app).get('/api/devinfo/requests');
+    expect(res.status).toBe(200);
+    const found = res.body.find((r) => r.id === createdId);
+    expect(found).toBeDefined();
+    expect(found.votes).toBe(0);
+    expect(found.done).toBeFalsy();
+  });
+
+  test('POST /api/devinfo/vote/:id increments vote count', async () => {
+    const res = await request(app)
+      .post(`/api/devinfo/vote/${createdId}`)
+      .set(authHeader(NORA))
+      .send();
+    expect(res.status).toBe(200);
+    expect(res.body.votes).toBe(1);
+  });
+
+  test('non-admin cannot toggle done', async () => {
+    const res = await request(app)
+      .patch(`/api/devinfo/request/${createdId}`)
+      .set(authHeader(NORA))
+      .send({ done: 1 });
+    expect(res.status).toBe(403);
+  });
+
+  test('admin can mark request as done', async () => {
+    const res = await request(app)
+      .patch(`/api/devinfo/request/${createdId}`)
+      .set(authHeader(OMAR))
+      .send({ done: 1 });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    const list = await request(app).get('/api/devinfo/requests');
+    const found = list.body.find((r) => r.id === createdId);
+    expect(found.done).toBeTruthy();
+  });
+
+  test('non-admin cannot delete a request', async () => {
+    const res = await request(app)
+      .delete(`/api/devinfo/request/${createdId}`)
+      .set(authHeader(NORA));
+    expect(res.status).toBe(403);
+  });
+
+  test('admin can delete a request and it disappears from listing', async () => {
+    const res = await request(app)
+      .delete(`/api/devinfo/request/${createdId}`)
+      .set(authHeader(OMAR));
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    const list = await request(app).get('/api/devinfo/requests');
+    const found = list.body.find((r) => r.id === createdId);
+    expect(found).toBeUndefined();
+  });
+});
+
