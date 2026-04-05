@@ -98,7 +98,7 @@ db.exec(`
 // Migrations never need to be run manually — they apply automatically on startup.
 //
 // IMPORTANT: never edit a past migration. Always append a new one.
-const SCHEMA_VERSION = 22;
+const SCHEMA_VERSION = 23;
 
 const migrations = [
   // ── v1: P2P letter market ─────────────────────────────────────────────────
@@ -577,6 +577,29 @@ const migrations = [
   () => {
     db.exec(`ALTER TABLE room_members ADD COLUMN futelo_gold_active INTEGER NOT NULL DEFAULT 1`);
   },
+
+  // v23 – Feature request board (global, not per-room)
+  // Users can submit ideas and vote on them (unlimited votes per user).
+  // Admins can mark requests as done via PATCH /api/devinfo/request/:id.
+  () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS feature_requests (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id    INTEGER NOT NULL REFERENCES users(id),
+        text       TEXT    NOT NULL,
+        done       INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE TABLE IF NOT EXISTS feature_votes (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        request_id INTEGER NOT NULL REFERENCES feature_requests(id),
+        user_id    INTEGER NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE INDEX IF NOT EXISTS idx_fv_request ON feature_votes(request_id);
+      CREATE INDEX IF NOT EXISTS idx_fv_user    ON feature_votes(user_id);
+    `);
+  },
 ];
 
 // Apply any pending migrations inside a single transaction so a crash mid-way
@@ -682,6 +705,11 @@ const stmts = {
   ),
   getUserMarketListings: db.prepare(
     "SELECT * FROM market_listings WHERE seller_id = ? AND room_id = ? AND status = 'open' ORDER BY listed_at DESC"
+  ),
+  // Count of levels a user has escrowed on the regular market (not BM) per room.
+  // Each open listing represents exactly 1 level removed from inventory_json.
+  getMarketEscrowCount: db.prepare(
+    "SELECT COUNT(*) AS cnt FROM market_listings WHERE seller_id = ? AND room_id = ? AND status = 'open'"
   ),
 
   // ── Black market listings ──────────────────────────────────────────────────
@@ -957,6 +985,74 @@ const stmts = {
   ),
   getVotersForReply: db.prepare(
     'SELECT voter_id FROM prompt_votes WHERE reply_id = ?'
+  ),
+
+  // ── Leaderboard queries ───────────────────────────────────────────────────
+  // Top players by total letter levels in inventory, scoped to a room.
+  leaderboardLetters: db.prepare(`
+    SELECT u.id AS userId, u.username, u.first_name, u.photo_url,
+           rm.inventory_json
+    FROM room_members rm
+    JOIN users u ON u.id = rm.user_id
+    WHERE rm.room_id = ? AND u.id != 0
+    ORDER BY (
+      SELECT COALESCE(SUM(value), 0)
+      FROM json_each(rm.inventory_json)
+    ) DESC
+    LIMIT 10
+  `),
+  // Top players by coins, scoped to a room — coins column intentionally excluded.
+  leaderboardCoins: db.prepare(`
+    SELECT u.id AS userId, u.username, u.first_name, u.photo_url
+    FROM room_members rm
+    JOIN users u ON u.id = rm.user_id
+    WHERE rm.room_id = ? AND u.id != 0
+    ORDER BY rm.coins DESC
+    LIMIT 10
+  `),
+  // Top players by message count in a room.
+  leaderboardMessages: db.prepare(`
+    SELECT u.id AS userId, u.username, u.first_name, u.photo_url,
+           COUNT(*) AS messageCount
+    FROM messages m
+    JOIN users u ON u.id = m.user_id
+    WHERE m.room_id = ? AND m.user_id != 0
+    GROUP BY m.user_id
+    ORDER BY messageCount DESC
+    LIMIT 10
+  `),
+
+  // ── Feature requests ──────────────────────────────────────────────────────
+  insertFeatureRequest: db.prepare(
+    'INSERT INTO feature_requests (user_id, text) VALUES (?, ?)'
+  ),
+  getFeatureRequests: db.prepare(`
+    SELECT fr.id, fr.user_id, fr.text, fr.done, fr.created_at,
+           u.username, u.first_name,
+           COUNT(fv.id) AS votes
+    FROM feature_requests fr
+    JOIN users u ON u.id = fr.user_id
+    LEFT JOIN feature_votes fv ON fv.request_id = fr.id
+    GROUP BY fr.id
+    ORDER BY votes DESC, fr.created_at ASC
+  `),
+  insertFeatureVote: db.prepare(
+    'INSERT INTO feature_votes (request_id, user_id) VALUES (?, ?)'
+  ),
+  getUserVoteCount: db.prepare(
+    'SELECT COUNT(*) AS cnt FROM feature_votes WHERE request_id = ? AND user_id = ?'
+  ),
+  setFeatureRequestDone: db.prepare(
+    'UPDATE feature_requests SET done = ? WHERE id = ?'
+  ),
+  getFeatureRequestById: db.prepare(
+    'SELECT * FROM feature_requests WHERE id = ?'
+  ),
+  deleteFeatureRequest: db.prepare(
+    'DELETE FROM feature_requests WHERE id = ?'
+  ),
+  deleteFeatureVotes: db.prepare(
+    'DELETE FROM feature_votes WHERE request_id = ?'
   ),
 };
 

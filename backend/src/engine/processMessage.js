@@ -39,10 +39,12 @@ const {
 
 /**
  * Compute the actual roll cost for a player given their current inventory.
- * cost = ROLL_COST + ROLL_COST_SCALE × Σ(inventory values)
+ * cost = ROLL_COST + ROLL_COST_SCALE × (Σ(inventory values) + escrowed market levels)
+ * @param {Object} inventory     - player's current inventory_json object
+ * @param {number} [extraLevels] - levels currently escrowed on the regular market
  */
-function computeRollCost(inventory) {
-  const totalLevels = Object.values(inventory || {}).reduce((s, v) => s + v, 0);
+function computeRollCost(inventory, extraLevels = 0) {
+  const totalLevels = Object.values(inventory || {}).reduce((s, v) => s + v, 0) + extraLevels;
   return ROLL_COST + ROLL_COST_SCALE * totalLevels;
 }
 
@@ -345,7 +347,8 @@ function shopRoll(userId, roomId = 0) {
   requireUser(userId);
   const rm        = requireRoomMember(userId, roomId);
   const inventory = JSON.parse(rm.inventory_json || '{}');
-  const rollCost  = computeRollCost(inventory);
+  const escrow    = stmts.getMarketEscrowCount.get(userId, roomId)?.cnt ?? 0;
+  const rollCost  = computeRollCost(inventory, escrow);
 
   if (rm.coins < rollCost) {
     throw new Error(`Monedas insuficientes. La tirada cuesta ${rollCost} 🪙 con tu inventario actual.`);

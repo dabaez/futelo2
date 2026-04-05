@@ -45,6 +45,8 @@ const mockStmts = {
   upsertRoomStreak:          { run: jest.fn() },
   // Forge emoji unlocks (default: none unlocked)
   getUnlockedEmojis:         { all: jest.fn(() => []) },
+  // Regular market escrow (default: 0 listings — no effect on cost scaling by default)
+  getMarketEscrowCount:      { get: jest.fn(() => ({ cnt: 0 })) },
 };
 
 jest.mock('../db/database', () => ({

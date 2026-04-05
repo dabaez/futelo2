@@ -48,7 +48,8 @@ function buyPickaxe(userId, roomId = 0) {
   const rm = requireRoomMember(userId, roomId);
 
   const inv         = JSON.parse(rm.inventory_json || '{}');
-  const totalLevels = Object.values(inv).reduce((s, v) => s + v, 0);
+  const escrow      = stmts.getMarketEscrowCount.get(userId, roomId)?.cnt ?? 0;
+  const totalLevels = Object.values(inv).reduce((s, v) => s + v, 0) + escrow;
   const pickaxeCost = PICKAXE_COST + PICKAXE_COST_SCALE * totalLevels;
 
   if (rm.coins < pickaxeCost) {

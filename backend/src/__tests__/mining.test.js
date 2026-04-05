@@ -14,6 +14,8 @@ const mockStmts = {
   addRoomPickaxeHits:    { run: jest.fn() },
   useRoomPickaxeHit:     { run: jest.fn() },
   updateRoomInventory:   { run: jest.fn() },
+  // Regular market escrow (default: 0 listings — no effect on cost scaling by default)
+  getMarketEscrowCount:  { get: jest.fn(() => ({ cnt: 0 })) },
 };
 
 jest.mock('../db/database', () => ({
