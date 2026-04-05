@@ -4,23 +4,31 @@ import React from 'react';
  * Top header bar – displays the Futelo logo, coin balance, and connection
  * indicator on a single row.
  */
-export default function Header({ coins, connected, onShopOpen, onLotteryOpen, hasActiveLottery, onAchievementsOpen }) {
+export default function Header({ coins, connected, onShopOpen, onLotteryOpen, hasActiveLottery, onAchievementsOpen, onDevInfoOpen, onLeaderboardOpen }) {
   return (
     <header className="flex items-center justify-between px-3 py-2 bg-tg-bg border-b border-tg-bg-sec">
-      {/* Brand */}
-      <div className="flex items-center gap-1.5">
+      {/* Brand – tap to open dev info */}
+      <button
+        onClick={onDevInfoOpen}
+        className="flex items-center gap-1.5 active:opacity-60 transition-opacity"
+        aria-label="Información de desarrollo"
+      >
         <span className="text-xl">💬</span>
         <span className="font-bold text-base text-tg-text tracking-tight">Futelo</span>
         {/* Connection dot */}
         <span className={`w-2 h-2 rounded-full ml-1 ${connected ? 'bg-emerald-400' : 'bg-gray-400'}`} />
-      </div>
+      </button>
 
       {/* Right side: coins + lottery + shop */}
       <div className="flex items-center gap-2">
-        <div className="bg-tg-bg-sec rounded-full px-3 py-1 flex items-center gap-1">
+        <button
+          onClick={onLeaderboardOpen}
+          className="bg-tg-bg-sec rounded-full px-3 py-1 flex items-center gap-1 active:opacity-70 transition-opacity"
+          aria-label="Tabla de posiciones"
+        >
           <span className="text-sm">🪙</span>
           <span className="text-sm font-bold text-tg-text">{coins ?? '…'}</span>
-        </div>
+        </button>
         <button
           onClick={onAchievementsOpen}
           className="bg-tg-bg-sec text-tg-text text-xs font-semibold px-3 py-1.5 rounded-full active:opacity-80 transition-opacity"

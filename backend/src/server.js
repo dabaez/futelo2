@@ -825,6 +825,124 @@ app.post('/api/reactions/:messageId', authMiddleware, (req, res) => {
   res.json({ ok: true, likes, dislikes, action: 'added' });
 });
 
+// ── REST: /api/leaderboard ─────────────────────────────────────────────────
+// Returns top-10 players in three categories, scoped to a room.
+// Coins column is deliberately omitted from the coins ranking.
+app.get('/api/leaderboard', (req, res) => {
+  const roomId = Number(req.query.roomId) || 0;
+  try {
+    const lettersRaw = stmts.leaderboardLetters.all(roomId);
+    const letters = lettersRaw.map((r) => {
+      const inv = JSON.parse(r.inventory_json || '{}');
+      const totalLevels = Object.values(inv).reduce((s, v) => s + v, 0);
+      return {
+        userId:    r.userId,
+        username:  r.username,
+        firstName: r.first_name,
+        photoUrl:  r.photo_url,
+        score:     totalLevels,
+      };
+    });
+
+    const coins = stmts.leaderboardCoins.all(roomId).map((r) => ({
+      userId:    r.userId,
+      username:  r.username,
+      firstName: r.first_name,
+      photoUrl:  r.photo_url,
+    }));
+
+    const messages = stmts.leaderboardMessages.all(roomId).map((r) => ({
+      userId:    r.userId,
+      username:  r.username,
+      firstName: r.first_name,
+      photoUrl:  r.photo_url,
+      score:     r.messageCount,
+    }));
+
+    res.json({ letters, coins, messages });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── REST: /api/devinfo — patch notes + feature requests ────────────────────
+// GET  /api/devinfo/config       – patch notes + admin IDs (public, no auth)
+// GET  /api/devinfo/requests     – all feature requests with vote counts (public)
+// POST /api/devinfo/request      – submit a new feature request (auth required)
+// POST /api/devinfo/vote/:id     – vote on a request (auth required, unlimited)
+// PATCH /api/devinfo/request/:id – toggle done=1/0 (auth + must be ADMIN_USER_IDS)
+
+app.get('/api/devinfo/config', (_req, res) => {
+  res.json({
+    patchNotes:   config.PATCH_NOTES,
+    adminUserIds: config.ADMIN_USER_IDS,
+  });
+});
+
+app.get('/api/devinfo/requests', (_req, res) => {
+  try {
+    res.json(stmts.getFeatureRequests.all());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/devinfo/request', authMiddleware, (req, res) => {
+  const text = (req.body.text || '').trim();
+  if (!text || text.length < 5) return res.status(400).json({ error: 'El texto es demasiado corto.' });
+  if (text.length > 300)        return res.status(400).json({ error: 'El texto es demasiado largo (máx. 300 caracteres).' });
+  try {
+    const info = stmts.insertFeatureRequest.run(req.tgUser.id, text);
+    res.json({ ok: true, id: info.lastInsertRowid });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/devinfo/vote/:id', authMiddleware, (req, res) => {
+  const requestId = Number(req.params.id);
+  if (!Number.isInteger(requestId) || requestId <= 0) return res.status(400).json({ error: 'ID inválido.' });
+  try {
+    const req_ = stmts.getFeatureRequestById.get(requestId);
+    if (!req_) return res.status(404).json({ error: 'Solicitud no encontrada.' });
+    stmts.insertFeatureVote.run(requestId, req.tgUser.id);
+    const { votes } = stmts.getFeatureRequests.all().find((r) => r.id === requestId) || { votes: 0 };
+    res.json({ ok: true, votes });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/devinfo/request/:id', authMiddleware, (req, res) => {
+  const adminIds = config.ADMIN_USER_IDS || [];
+  if (!adminIds.includes(req.tgUser.id)) return res.status(403).json({ error: 'No autorizado.' });
+  const requestId = Number(req.params.id);
+  if (!Number.isInteger(requestId) || requestId <= 0) return res.status(400).json({ error: 'ID inválido.' });
+  const done = req.body.done ? 1 : 0;
+  try {
+    stmts.setFeatureRequestDone.run(done, requestId);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/devinfo/request/:id', authMiddleware, (req, res) => {
+  const adminIds = config.ADMIN_USER_IDS || [];
+  if (!adminIds.includes(req.tgUser.id)) return res.status(403).json({ error: 'No autorizado.' });
+  const requestId = Number(req.params.id);
+  if (!Number.isInteger(requestId) || requestId <= 0) return res.status(400).json({ error: 'ID inválido.' });
+  try {
+    db.transaction(() => {
+      stmts.deleteFeatureVotes.run(requestId);
+      stmts.deleteFeatureRequest.run(requestId);
+    })();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Socket.io ─────────────────────────────────────────────────────────────
 io.use(socketAuth);
 

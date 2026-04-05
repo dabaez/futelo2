@@ -9,6 +9,8 @@ import PromptBanner       from './components/PromptBanner.jsx';
 import DevUserPicker      from './components/DevUserPicker.jsx';
 import EmojiForgeModal    from './components/EmojiForgeModal.jsx';
 import AchievementsModal  from './components/AchievementsModal.jsx';
+import DevInfoModal       from './components/DevInfoModal.jsx';
+import LeaderboardModal   from './components/LeaderboardModal.jsx';
 import { useAuth }        from './hooks/useAuth.js';
 import { useSocket }      from './hooks/useSocket.js';
 
@@ -54,6 +56,8 @@ export default function App() {
   const [forgeOpen,   setForgeOpen]   = useState(false);
   const [achievementsOpen, setAchievementsOpen] = useState(false);
   const [achievementsKey,  setAchievementsKey]  = useState(0);
+  const [devInfoOpen, setDevInfoOpen] = useState(false);
+  const [leaderboardOpen, setLeaderboardOpen] = useState(false);
   const [toast,     setToast]     = useState(null); // { text, type }
 
   // ── Emoji forge state ────────────────────────────────────────────────────
@@ -443,6 +447,8 @@ export default function App() {
         onLotteryOpen={() => setLotteryOpen(true)}
         hasActiveLottery={!!lotteryRound}
         onAchievementsOpen={() => setAchievementsOpen(true)}
+        onDevInfoOpen={() => setDevInfoOpen(true)}
+        onLeaderboardOpen={() => setLeaderboardOpen(true)}
       />
 
       {/* ── Dev identity banner (only shown outside Telegram) ──────────── */}
@@ -567,6 +573,20 @@ export default function App() {
         initData={initData}
         chatId={chatId}
         refreshKey={achievementsKey}
+      />
+      {/* ── Dev info modal ──────────────────────────────────────────────── */}
+      <DevInfoModal
+        isOpen={devInfoOpen}
+        onClose={() => setDevInfoOpen(false)}
+        initData={initData}
+        userId={user?.id}
+      />
+      {/* ── Leaderboard modal ──────────────────────────────────────────── */}
+      <LeaderboardModal
+        isOpen={leaderboardOpen}
+        onClose={() => setLeaderboardOpen(false)}
+        chatId={chatId}
+        myUserId={user?.id}
       />
       {/* ── Toast notification ──────────────────────────────────────────── */}
       {toast && (
