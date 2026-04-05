@@ -39,7 +39,9 @@ App.jsx
  ├── BlackMarketModal             ← chatId prop; secret P2P market (triple-tap)
  ├── LotteryModal                 ← chatId prop; gambling round (auto-opens on new_lottery)
  ├── EmojiForgeModal              ← isOpen, onClose, initData, chatId, coins, inventory, socket, onPurchase, onEmojiInsert, currentDraft, emojiDefs
- └── AchievementsModal            ← isOpen, onClose, initData, chatId
+ ├── AchievementsModal            ← isOpen, onClose, initData, chatId
+ ├── DevInfoModal                 ← isOpen, onClose, initData, userId
+ └── LeaderboardModal             ← isOpen, onClose, initData, userId, chatId
 ```
 
 **Triple-tap secret (black market):** `handleShopClick` in `App.jsx` uses
@@ -80,6 +82,8 @@ Socket events handled in `App.jsx`:
 - `emoji_complete` → updates `unlockedEmojis` state, shows forge result toast
 - `achievement_unlocked` → shows achievement toast (one per achievement, 6 s)
 - Beg messages arrive as `new_message` (system message with JSON `{type:"beg",...}` payload); rendered as amber cards by `MessageBubble`
+
+**`devInfoOpen` / `leaderboardOpen`** — boolean state in `App.jsx`. `devInfoOpen` is set by `onDevInfoOpen` (passed as a prop to `Header`, triggered by clicking the "💬 Futelo" brand button). `leaderboardOpen` is set by `onLeaderboardOpen` (passed to `Header`, triggered by clicking the coin balance button). Both modals are rendered at the root of the app alongside the other modals.
 
 ---
 
@@ -161,6 +165,42 @@ Two-tab bottom-sheet (`🧪 Forja` + `😊 Emojis`).
 **`SYMBOL_CHARS`** in this file must stay in sync with `config.js` and `RestrictedKeyboard.jsx`. Current value: `'!?.,:-()@#&*;<>+~$%/^'` (22 chars).
 
 `onPurchase` called with `{ newCoins }` after successful instant-complete or hint purchase.
+
+---
+
+## AchievementsModal
+
+Bottom-sheet gallery of all achievements grouped by category. Each item shows: icon emoji, label, description, coin reward, and `✅` or `🔒` earned status.
+
+Data comes from `GET /api/achievements` (returns all achievements with `earned: true/false`). Fetched on modal open (`useEffect` on `isOpen`).
+
+---
+
+## DevInfoModal
+
+Bottom-sheet opened by tapping the **"💬 Futelo"** brand in `Header.jsx` (`onDevInfoOpen` prop). Three tabs:
+
+- **📋 Parches** — reads `PATCH_NOTES` from `GET /api/devinfo/config`.
+- **💡 Ideas** — lists open feature requests from `GET /api/devinfo/requests`; vote button `POST /api/devinfo/vote/:id`; submission textarea `POST /api/devinfo/request`.
+- **✅ Hechas** — completed (`done=1`) requests from the same endpoint.
+
+Admin users (whose `userId` appears in `adminUserIds` returned by `/api/devinfo/config`) see extra action buttons per card:
+- **✓ Listo / ↩ Reabrir** — `PATCH /api/devinfo/request/:id` with `{ done: 0|1 }`.
+- **🗑 Borrar** — `DELETE /api/devinfo/request/:id` (votes are cascade-deleted by the backend transaction).
+
+`RequestCard` sub-component receives `{ request, isAdmin, onVote, onToggleDone, onDelete, done }` props.
+
+---
+
+## LeaderboardModal
+
+Bottom-sheet opened by tapping the **coin balance** in `Header.jsx` (`onLeaderboardOpen` prop). Fetches `GET /api/leaderboard?roomId=X` on open. Three tabs:
+
+- **🔤 Letras** — total inventory levels per player; `score` field shown as `"X niv."`.
+- **🪙 Monedas** — ranking by coins but **the coin amount is never returned or shown** (privacy). Only rank + name displayed.
+- **💬 Mensajes** — message count per player; `score` field shown as is.
+
+Top 3 entries display medal emojis 🥇🥈🥉. Current user row highlighted with `bg-tg-button/15 ring-1 ring-tg-button/30`.
 
 ---
 

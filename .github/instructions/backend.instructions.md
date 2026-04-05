@@ -101,7 +101,7 @@ picks up new values on next page load via `GET /api/config`.
 - **better-sqlite3** – fully synchronous, single-writer SQLite.
 - WAL mode + `synchronous = NORMAL`.
 - DB file: `../../data/futelo.db` relative to `database.js` (i.e. `futelo/data/futelo.db`).
-- **Current schema version: 20** (migrations v1–v20 applied automatically on startup).
+- **Current schema version: 23** (migrations v1–v23 applied automatically on startup).
 
 ### Tables
 
@@ -127,6 +127,8 @@ picks up new values on next page load via `GET /api/config`.
 | `user_achievements` | Earned achievements per room. Columns: `user_id`, `room_id`, `achievement_id`. Unique `(user_id, room_id, achievement_id)`. (migration v17, made per-room in v19) |
 | `message_reactions` | Per-message reactions. Columns: `message_id`, `user_id`, `reaction` (`like`/`dislike`). Unique `(message_id, user_id)`. (migration v18) |
 | `emoji_hints` | Purchased forge hints, **global per-user** (not per-room). Columns: `id`, `user_id`, `hint_text`, `created_at`. (migration v20) |
+| `feature_requests` | User-submitted feature ideas, **global** (no room scope). Columns: `id`, `user_id`, `text`, `done`, `created_at`. (migration v23) |
+| `feature_votes` | Votes on feature requests, unlimited per user. Columns: `id`, `request_id`, `user_id`, `created_at`. FK → `feature_requests(id)`; must be deleted before deleting the parent request. (migration v23) |
 
 ### Prepared Statements
 
@@ -193,6 +195,17 @@ const { db, stmts, upsertUser, requireUser, upsertRoom, requireRoom } = require(
 |---|---|
 | `insertEmojiHint` | `INSERT INTO emoji_hints (user_id, hint_text)` — persists a purchased hint |
 | `getEmojiHints` | `SELECT hint_text FROM emoji_hints WHERE user_id = ?` — returns all hints for a user (global, not per-room) |
+| `insertFeatureRequest` | `INSERT INTO feature_requests (user_id, text)` |
+| `getFeatureRequests` | All requests with vote counts via LEFT JOIN on `feature_votes`, ordered by votes DESC |
+| `getFeatureRequestById` | Single request by `id` |
+| `insertFeatureVote` | `INSERT INTO feature_votes (request_id, user_id)` — unlimited votes |
+| `getUserVoteCount` | Vote count for a `(request_id, user_id)` pair |
+| `setFeatureRequestDone` | `UPDATE feature_requests SET done = ? WHERE id = ?` |
+| `deleteFeatureVotes` | `DELETE FROM feature_votes WHERE request_id = ?` — must run before `deleteFeatureRequest` |
+| `deleteFeatureRequest` | `DELETE FROM feature_requests WHERE id = ?` |
+| `leaderboardLetters` | Top-10 room members ordered by total inventory levels (joined to `users`) |
+| `leaderboardCoins` | Top-10 room members ordered by coins DESC — **no coins column in output** (privacy) |
+| `leaderboardMessages` | Top-10 users ordered by message count in a room |
 
 ---
 
@@ -369,6 +382,13 @@ All endpoints in `server.js`. Auth sent as `x-init-data` header or `body.initDat
 | POST | `/api/forge/instant` | initData | Instant-complete active merge (pays coins) |
 | POST | `/api/forge/hint` | initData | Buy a hint for active merge `{ mergeId }` |
 | GET | `/api/forge/status` | initData | Active merge + unlocked emojis |
+| GET | `/api/leaderboard?roomId=R` | none | Top-10 players in 3 categories (letters, coins rank-only, messages) |
+| GET | `/api/devinfo/config` | none | `PATCH_NOTES` array + `adminUserIds` array |
+| GET | `/api/devinfo/requests` | none | All feature requests with vote counts |
+| POST | `/api/devinfo/request` | initData | Submit a feature request (5–300 chars) |
+| POST | `/api/devinfo/vote/:id` | initData | Vote on a request (unlimited) |
+| PATCH | `/api/devinfo/request/:id` | initData + admin | Toggle `done=1/0` (admin only; see `ADMIN_USER_IDS`) |
+| DELETE | `/api/devinfo/request/:id` | initData + admin | Delete request and all its votes in a transaction |
 | GET | `/api/achievements` | initData | All achievements with `earned` flag |
 
 ---
@@ -427,7 +447,7 @@ All endpoints in `server.js`. Auth sent as `x-init-data` header or `body.initDat
 
 - Config: `backend/jest.config.js` (`testEnvironment: 'node'`, `maxWorkers: 1`)
 - Run: `cd backend && npm test`
-- **291 tests across 10 suites** (all passing)
+- **309 tests across 10 suites** (all passing)
 
 | File | Tests | What it covers |
 |---|---|---|
@@ -438,7 +458,7 @@ All endpoints in `server.js`. Auth sent as `x-init-data` header or `body.initDat
 | `src/__tests__/mining.test.js` | 18 | `buyPickaxe` (scaled cost), `swing`, all-capped coin fallback |
 | `src/__tests__/prompt.test.js` | 22 | `buyPrompt`, `submitReply` (incl. username sourced from users table), `castVote`, `closePrompt` |
 | `src/__tests__/lottery.test.js` | 14 | `startLottery`, `placeBet`, `closeLottery`, carry-over |
-| `src/__tests__/api.test.js` | 68 | All REST endpoints end-to-end with temp SQLite DB; `my-listings` open-only regression; reaction coin correctness; hint persistence |
+| `src/__tests__/api.test.js` | 81 | All REST endpoints end-to-end with temp SQLite DB; `my-listings` open-only regression; reaction coin correctness; hint persistence; leaderboard shape (coins score hidden); devinfo CRUD + admin-only guard for toggle/delete |
 | `src/__tests__/emojiForge.test.js` | 27 | `inventoryKey`, `matchRecipe`, `startMerge` (7 cases), `instantComplete` (4), `buyHint` (persists to DB), `getStatus` (returns hints array) |
 | `src/__tests__/achievements.test.js` | 40 | Already-earned guard, stat counter updates, all 8 event types, transaction integrity |
 

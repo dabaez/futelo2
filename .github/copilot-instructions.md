@@ -64,6 +64,8 @@ futelo/
 │   │   │   ├── ShopModal.jsx
 │   │   │   ├── BlackMarketModal.jsx
 │   │   │   ├── LotteryModal.jsx
+│   │   │   ├── DevInfoModal.jsx
+│   │   │   ├── LeaderboardModal.jsx
 │   │   │   └── DevUserPicker.jsx
 │   │   ├── hooks/
 │   │   │   ├── useAuth.js
@@ -174,3 +176,4 @@ Chat IDs for different tabs.
 | BM heat is per-room | It is **not** per-room — BM heat is global. `getAllOpenBmListingsGlobal` scans all rooms. Intentional. |
 | Hint purchase gives a duplicate hint | `buyHint` filters out already-purchased hint texts (`getEmojiHints`) before picking randomly. If all hints for unowned emojis are already purchased it throws — never skip this guard. |
 | Prompt / lottery won't start | Only one active per room at a time. Check `getActivePrompt` / `getActiveLotteryRound` first. |
+| `DELETE /api/devinfo/request/:id` returns 500 | `feature_votes` has a FK to `feature_requests`. Run `stmts.deleteFeatureVotes.run(id)` inside a `db.transaction()` **before** `stmts.deleteFeatureRequest.run(id)`. |

@@ -55,7 +55,8 @@ Open [http://localhost:5173](http://localhost:5173) in a browser.
 | `SERVER_PORT` | yes | Port the Express server listens on. Default: `3001`. |
 | `BOT_TOKEN` | prod only | Telegram bot token from [@BotFather](https://t.me/BotFather). Not needed when `DEV_MODE=true`. |
 | `BOT_TOKEN_HASH` | prod only | Pre-computed HMAC key used to validate Telegram WebApp `initData`. Set to the same value as `BOT_TOKEN` — the server derives the key itself. Leave blank to have it computed automatically. |
-| `BOT_MODE` | prod | `polling` (default, good for local) or `webhook` (required in production). |
+| `ADMIN_USER_IDS` | optional | Comma-separated Telegram user IDs allowed to mark, reopen, or delete feature requests. Example: `123456,789012`. |
+| `ADMIN_USER_IDS` | optional | Comma-separated Telegram user IDs allowed to mark, reopen, or delete feature requests. Example: `123456,789012`. |
 | `WEBHOOK_DOMAIN` | prod, webhook | Full HTTPS URL of your server, e.g. `https://your-domain.com`. Used to register the webhook with Telegram. |
 | `MINI_APP_URL` | prod | URL where the frontend is served, e.g. `https://your-domain.com`. Shown in the `/start` group reply button. |
 | `MINI_APP_DIRECT_LINK` | prod | Direct Mini App deeplink from BotFather (format: `https://t.me/your_bot/your_app`). Without this the `/start` button opens a plain URL with no Telegram context. |
@@ -268,12 +269,43 @@ Sistema de logros que recompensa hitos del juego con monedas.
 
 Las alertas por usuario (p.ej. "tu letra se vendió") se **persisten en la DB**. Si estás offline cuando tu listado se vende, el toast queda en cola y se muestra la próxima vez que te conectes.
 
+### DevInfo Modal
+
+Toca el nombre **"💬 Futelo"** en la esquina superior izquierda para abrir el panel de información de desarrollo con tres pestañas:
+
+- **📋 Parches** — historial de versiones con cambios por versión.
+- **💡 Ideas** — lista de solicitudes de funcionalidades enviadas por la comunidad. Cualquier jugador puede enviar una idea (5–300 caracteres) y votar por las existentes (votos ilimitados). El ranking es por votos.
+- **✅ Hechas** — ideas ya implementadas.
+
+Los usuarios en `ADMIN_USER_IDS` ven botones adicionales para marcar/reabrir/eliminar solicitudes directamente desde la interfaz.
+
+### Leaderboard
+
+Toca el saldo de monedas en el header para abrir la tabla de posiciones con tres categorías:
+
+- **🔤 Letras** — jugadores con más niveles de inventario totales (puntuación visible).
+- **🪙 Monedas** — jugadores con más monedas, pero **sin mostrar la cantidad** (solo posición).
+- **💬 Mensajes** — jugadores con más mensajes enviados en la sala (puntuación visible).
+
+La tabla muestra los 10 primeros. Tu propia fila queda resaltada. Los puestos 1–3 muestran medallas 🥇🥈🥉.
+
+### Feature Request CLI
+
+Herramienta interactiva de terminal para gestionar solicitudes directamente en el servidor de producción (acceso directo a la misma DB sin pasar por la API):
+
+```bash
+cd backend
+npm run cli
+```
+
+Controles: `↑/↓` o `j/k` navegar · `d` marcar/desmarcar como implementada · `x` eliminar · `n` nueva idea · `Tab` cambiar vista · `q` salir.
+
 ---
 
 ## Tests
 
 ```bash
-cd backend && npm test   # Jest + supertest  (296 tests, 10 suites)
+cd backend && npm test   # Jest + supertest  (309 tests, 10 suites)
 cd frontend && npm test  # Vitest + Testing Library  (55 tests, 2 suites)
 ```
 
@@ -288,7 +320,7 @@ cd frontend && npm test  # Vitest + Testing Library  (55 tests, 2 suites)
 | `mining.test.js` | 21 | `buyPickaxe` (scaled cost), `swing`, hit/miss probability, `_numbers`/`_symbols` finds, all-caps coin fallback |
 | `prompt.test.js` | 21 | `buyPrompt`, `submitReply`, `castVote`, `closePrompt` with all edge cases |
 | `lottery.test.js` | 14 | `startLottery`, `placeBet`, `closeLottery`, `getActiveLottery`, cap overflow coins |
-| `api.test.js` | 68 | All REST endpoints end-to-end with a real SQLite DB; includes regression for `my-listings` open-only filter, reaction coin correctness (room coins not global), hint persistence via status |
+| `api.test.js` | 81 | All REST endpoints end-to-end with a real SQLite DB; includes regression for `my-listings` open-only filter, reaction coin correctness (room coins not global), hint persistence via status; leaderboard shape (coins score hidden); devinfo CRUD + admin guard |
 | `emojiForge.test.js` | 28 | `inventoryKey`, `matchRecipe`, `startMerge` (validation + deduction), `instantComplete`, `buyHint` (no-duplicate guard, all-hints-purchased guard, persists to DB), `getStatus` (returns merge + emojis + hints) |
 | `achievements.test.js` | 40 | `checkAchievements` – all event types, already-earned guard, multi-award transaction, stat counter updates |
 
