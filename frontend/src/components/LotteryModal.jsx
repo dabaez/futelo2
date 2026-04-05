@@ -110,7 +110,7 @@ export default function LotteryModal({
   if (!isOpen) return null;
 
   const startCost = cfg?.LOTTERY_START_COST ?? 50;
-  const coinsPerLetter = cfg?.GAMBLING_COINS_PER_LETTER ?? 50;
+  const coinsPerLetter = cfg?.GAMBLING_COINS_PER_LETTER ?? 30;
   const winLetters     = cfg?.GAMBLING_WIN_LETTERS ?? 2;
   const inv            = inventory || {};
   const isExpired      = !!lotteryRound && Math.floor(Date.now() / 1000) >= lotteryRound.closes_at;
@@ -125,7 +125,7 @@ export default function LotteryModal({
     betsByLetter[b.letter].push(b.firstName || b.username || '?');
   });
 
-  // Potential jackpot if nobody wins (all bets × 50 coins + current jackpot seed)
+  // Potential jackpot if nobody wins (all bets × 30 coins + current jackpot seed)
   const betCount = lotteryRound?.bets?.length ?? 0;
   const potentialCarry = (lotteryRound?.jackpot ?? 0) + betCount * coinsPerLetter;
 

@@ -116,7 +116,7 @@ module.exports = {
   /** How long (seconds) a gambling round stays open for guesses. */
   LOTTERY_DURATION_SEC: 5 * 60,   // 5 minutes
   /** Coins created per letter in the loser-pot (winner payout or jackpot carry). */
-  GAMBLING_COINS_PER_LETTER: 50,
+  GAMBLING_COINS_PER_LETTER: 30,
   /** Inventory levels added to the winning letter for a correct guess. */
   GAMBLING_WIN_LETTERS: 2,
   /**
@@ -393,5 +393,129 @@ module.exports = {
     "Un pajarito me conto...",
     "Sin importar cuantas personas lo digan, yo jamas voy a creer que...",
     "describe el sexo vñkon un futelo",
+  ],
+
+  // ── Dev Info / Patch Notes ─────────────────────────────────────────────────
+  /**
+   * Telegram user IDs that can mark feature requests as done via PATCH /api/devinfo/request/:id.
+   * Set the ADMIN_USER_IDS env var to a comma-separated list of Telegram user IDs.
+   * Example: ADMIN_USER_IDS=123456,789012
+   */
+  ADMIN_USER_IDS: (process.env.ADMIN_USER_IDS || '')
+    .split(',')
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isInteger(n) && n > 0),
+
+  /**
+   * Patch notes shown in the DevInfo modal, newest first.
+   * To add a new entry: prepend an object to this array and restart the server.
+   * Fields: version (string), date (string), changes (string[])
+   */
+  PATCH_NOTES: [
+    {
+      version: 'v1.0',
+      date: '5 Abr 2026',
+      changes: [
+        'Modal de información de desarrollo con parches, ideas y solicitudes de funcionalidades',
+        'Modal de tabla de posiciones: letras, monedas (privadas) y mensajes',
+        'Los admins pueden marcar, reabrir y eliminar ideas desde el modal y desde el terminal',
+        'Herramienta de línea de comandos para gestionar solicitudes en el servidor',
+        'Precio de cajitas y minas ahora incluye letras en venta en el mercado',
+        'Recompensa de apuestas reducida para mayor balance (50 → 30 monedas por letra)',
+      ],
+    },
+    {
+      version: 'v0.9',
+      date: '1 Abr 2026',
+      changes: [
+        'Futelo GOLD — mejora tu perfil con efectos dorados ✨',
+        'Toggle para activar o desactivar el efecto GOLD',
+        'Logro especial: Centurión (100 upgrades de GOLD)',
+      ],
+    },
+    {
+      version: 'v0.8',
+      date: 'Mar 2026',
+      changes: [
+        'Pool de minería expandido: ahora puedes encontrar números y símbolos',
+        'Hints persistentes: las pistas compradas se guardan entre sesiones',
+        'Los logros se recargan automáticamente al desbloquear uno nuevo',
+        'Correcciones de seguridad: se rechazan caracteres no autorizados',
+      ],
+    },
+    {
+      version: 'v0.7',
+      date: 'Feb 2026',
+      changes: [
+        'Forja de Emojis 🧪 — combina letras para desbloquear emojis especiales',
+        'Sistema de Logros 🏆 — 26 logros desbloqueables por categoría',
+        'Reacciones ❤️/👎 en mensajes del chat',
+        'Pistas criptográficas de recetas de emoji (20 monedas/pista)',
+        'Definiciones de emojis servidas desde el servidor (fuente única de verdad)',
+      ],
+    },
+    {
+      version: 'v0.6',
+      date: 'Ene 2026',
+      changes: [
+        'Mercado Negro con sistema de calor: más ventas = más riesgo de ser atrapado',
+        'Comisión del 20% en el mercado regular (el mercado negro sigue sin comisión)',
+        'Multa por ser atrapado en el mercado negro',
+        'Mensajes del sistema en el chat (resúmenes de loterías y prompts)',
+      ],
+    },
+    {
+      version: 'v0.5',
+      date: 'Dic 2025',
+      changes: [
+        'Prompts comunitarios 📣 — preguntas automáticas con votación de respuestas',
+        'Pool de preguntas de películas, series y videojuegos',
+        'Bonus por responder (+10 🪙) y por ganar (+100 🪙 / +30 🪙)',
+        'Compra prompts manualmente desde la tienda',
+      ],
+    },
+    {
+      version: 'v0.4',
+      date: 'Nov 2025',
+      changes: [
+        'Arquitectura multi-sala: cada grupo de Telegram tiene su propio estado independiente',
+        'Notificaciones push de Telegram cuando estás offline',
+        'Estadísticas de jugador por sala',
+        'Logros y progreso separados por sala',
+      ],
+    },
+    {
+      version: 'v0.3',
+      date: 'Oct 2025',
+      changes: [
+        'Minas de letras ⛏️ — compra un pico y golpea la roca para encontrar letras',
+        'Sistema de rareza en cajitas: Común / Bueno / Raro / Épico / Legendario',
+        'Animación de ruleta al abrir una cajita',
+        'Teclado: tecla ⇧ para alternar mayúsculas y minúsculas',
+        'Pool de letras uniforme + sistema de overflow cuando ya tienes todo al máximo',
+      ],
+    },
+    {
+      version: 'v0.2',
+      date: 'Sep 2025',
+      changes: [
+        'Mercado P2P de letras 🛒 — vende y compra letras con otros jugadores',
+        'Mercado Negro 🕵️ — mercado secreto (triple tap en la tienda)',
+        'Lotería de letras 🎲 — apuesta por una letra y gana el bote',
+        'Sistema de Pedir Monedas (beg) entre jugadores',
+        'Tienda rediseñada con 4 pestañas',
+      ],
+    },
+    {
+      version: 'v0.1',
+      date: 'Ago 2025',
+      changes: [
+        'Versión inicial de Futelo',
+        'Teclado restringido por inventario de letras',
+        'Sistema anti-spam con monedas (Tier 1 / 2 / 3)',
+        'Penalización por spam: letras bloqueadas y pérdida de monedas',
+        'Cajita de letras básica para ampliar el inventario',
+      ],
+    },
   ],
 };
